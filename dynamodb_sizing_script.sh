@@ -274,7 +274,7 @@ for REGION in $REGIONS; do
         fi
         
 	#initialize start and end time 
-	START_DATE_1MONTH=$(date -u -d "1 month ago" +"%Y-%m-%dT%H:%M:%SZ")
+	START_DATE_1MONTH=$(date -u -d "14 days ago" +"%Y-%m-%dT%H:%M:%SZ")
 	END_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
 
         # Get CloudWatch metrics for the last month
