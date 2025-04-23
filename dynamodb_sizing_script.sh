@@ -1,4 +1,4 @@
-#!/bin/bash -x 
+#!/bin/bash
 # DynamoDB and ScyllaDB Sizing Collection Script
 # This script collects sizing and usage metrics for DynamoDB tables
 
