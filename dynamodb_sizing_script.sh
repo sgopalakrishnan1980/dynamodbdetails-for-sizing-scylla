@@ -112,7 +112,7 @@ SUMMARY_FILE="$OUTPUT_DIR/dynamodb_summary.csv"
 DETAILED_FILE="$OUTPUT_DIR/dynamodb_detailed.json"
 
 # CSV header
-echo "Table Name,Avg Item Size (KB),Total Size (GB),Provisioned RCU,Provisioned WCU,Fourteen Day  Consumed RCU (Avg),Fourteen Day  WCU (Avg),Monthly Reads/Sec (Avg),Monthly Writes/Sec (Avg),Read P99 Latency (ms),Write P99 Latency (ms),Streams Enabled,Stream View Type,LSI Count,GSI Count" >> "$OUTPUT_DIR/dynamodb_summary.csv"
+echo "Table Name,Avg Item Size (KB),Total Size (GB),Provisioned RCU,Provisioned WCU,Fourteen Day  Consumed RCU (Avg),Fourteen Day  WCU (Avg),2 week  Reads/Sec (Avg),2 week Writes/Sec (Avg),Read P99 Latency (ms),Write P99 Latency (ms),Streams Enabled,Stream View Type,LSI Count,GSI Count" >> "$OUTPUT_DIR/dynamodb_summary.csv"
 
 # Log the filters being used
 echo "Filter configuration:" | tee -a "$OUTPUT_DIR/script.log"
@@ -290,7 +290,10 @@ for REGION in $REGIONS; do
             --region "$REGION" \
             --query "Datapoints[*].{Timestamp:Timestamp,MaxRCU:Maximum}" \
             --output json)
-        
+	    
+        #Dump all cloudwatchoutput to files 
+	touch "$TABLE"_CONSUMED_RCU && echo "$CONSUMED_RCU" >> "$TABLE"_CONSUMED_RCU
+ 
         # Calculate average monthly consumed RCU
         FOURTEENDAY_CONSUMED_RCU=$( [-z $FOURTEENDAY_CONSUMED_RCU ] && echo "Fourteen Day  Consumed RCU is null"   || echo "$CONSUMED_RCU" | jq -r 'add / length')
         
@@ -306,7 +309,8 @@ for REGION in $REGIONS; do
             --region "$REGION" \
             --query "Datapoints[*].{Timestamp:Timestamp,MaxRCU:Maximum}" \
             --output json)
-        
+	    
+        touch "$TABLE"_CONSUMED_WCU && echo "$CONSUMED_WCU" >> "$TABLE"_CONSUMED_WCU
         # Calculate average monthly consumed WCU
         FOURTEENFDAY_CONSUMED_WCU=$( [ -z $FOURTEENDAY_CONSUMED_WCU ] && echo "Monthly Consumed WCU is null " || echo "$CONSUMED_WCU" | jq -r 'add / length')
         
@@ -322,8 +326,10 @@ for REGION in $REGIONS; do
             --region "$REGION" \
             --query "Datapoints[*].{Timestamp:Timestamp,MaxRCU:Maximum}" \
             --output json)
+
+        touch "$TABLE"_GETITEM_HISTORY && echo "$READ_OPS" >> "$TABLE"_GETITEM_HISTORY
         
-        # Calculate average reads per second over the month
+        # Calculate average reads per second over the 14 DAYS
         MONTHLY_READS_PER_SEC=$( [-z $READ_OPS] && echo "READs per second is null " ||  [ $READ_OPS -eq 0 ] && echo "$READ_OPS" | jq -r 'add / length / 86400' || echo "0" )
         
         # 4. Write requests per second
@@ -338,6 +344,8 @@ for REGION in $REGIONS; do
             --region "$REGION" \
             --query "Datapoints[*].SampleCount" \
             --output json)
+
+        touch "$TABLE"_PUTITEM_HISTORY && echo "$WRITE_OPS" >> "$TABLE"_PUTITEM_HISTORY
         
         # Calculate average writes per second over the month
 	MONTHLY_WRITES_PER_SEC=$( [-z $WRITE_OPS ]  && echo "0" || [$WRITE_OPS -eq 0 ] && echo "$WRITE_OPS" | jq -r 'add / length / 86400'|| echo "0" )
@@ -354,7 +362,9 @@ for REGION in $REGIONS; do
             --region "$REGION" \
             --query "Datapoints[0].p99" \
             --output text)
-        
+
+	touch "$TABLE"_GETITEM_READP99_HISTORY &&  echo "$READ_P99_LATENCY" >> "$TABLE"_GETITEM_READP99_HISTORY
+ 
         # 6. P99 Write Latency
         WRITE_P99_LATENCY=$(aws cloudwatch get-metric-statistics \
             --namespace AWS/DynamoDB \
@@ -367,6 +377,8 @@ for REGION in $REGIONS; do
             --region "$REGION" \
             --query "Datapoints[0].p99" \
             --output text)
+
+         touch "$TABLE"_PUTITEM_WRITEP99_HISTORY && echo "$WRITE_P99_LATENCY" >> "$TABLE"_PUTITEM_WRITEP99_HISTORY
         
         # Handle null or missing values
         [ "$READ_P99_LATENCY" == "None" ] && READ_P99_LATENCY="N/A"
