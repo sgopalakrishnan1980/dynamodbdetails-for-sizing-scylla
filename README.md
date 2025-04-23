@@ -105,34 +105,20 @@ export AWS_SECRET_ACCESS_KEY=your_secret_key
 export AWS_SESSION_TOKEN=your_session_token  # if using temporary credentials
 ./dynamodb_sizing_script.sh -all
 ```
-
-## Output Files
+Output Files
 The script creates a timestamped directory with multiple output files:
 
-1. `dynamodb_summary.csv` - CSV summary of all tables with key metrics
-2. `dynamodb_detailed.json` - Detailed JSON data for all tables
-3. `[TABLE_NAME]_gsi_details.json` - Detailed information about each table's GSIs
-4. `[TABLE_NAME]_lsi_details.json` - Detailed information about each table's LSIs
-5. `script.log` - Log of script execution including filtering information
-
-## CSV Output Columns
-The CSV output includes the following columns:
-- Table Name
-- Avg Item Size (KB)
-- Total Size (GB)
-- Provisioned RCU
-- Provisioned WCU
-- Monthly Consumed RCU (Avg)
-- Monthly Consumed WCU (Avg)
-- Monthly Reads/Sec (Avg)
-- Monthly Writes/Sec (Avg)
-- Read P99 Latency (ms)
-- Write P99 Latency (ms)
-- Streams Enabled
-- Stream View Type
-- LSI Count
-- GSI Count
-
+dynamodb_summary.csv - Summary CSV with key metrics for all tables
+dynamodb_detailed.json - Detailed JSON with full metrics for all tables
+[TABLE_NAME]_CONSUMED_RCU - Time-series data for consumed read capacity
+[TABLE_NAME]_CONSUMED_WCU - Time-series data for consumed write capacity
+[TABLE_NAME]_GETITEM_HISTORY - GetItem operation history
+[TABLE_NAME]_PUTITEM_HISTORY - PutItem operation history
+[TABLE_NAME]_GETITEM_READP99_HISTORY - P99 latency for read operations
+[TABLE_NAME]_PUTITEM_WRITEP99_HISTORY - P99 latency for write operations
+[TABLE_NAME]_gsi_details.json - GSI configuration for each table
+[TABLE_NAME]_lsi_details.json - LSI configuration for each table
+script.log - Execution log with filter and configuration details
 ## Troubleshooting
 
 ### Permission Issues
