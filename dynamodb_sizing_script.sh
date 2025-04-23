@@ -112,7 +112,7 @@ SUMMARY_FILE="$OUTPUT_DIR/dynamodb_summary.csv"
 DETAILED_FILE="$OUTPUT_DIR/dynamodb_detailed.json"
 
 # CSV header
-echo "Table Name,Avg Item Size (KB),Total Size (GB),Provisioned RCU,Provisioned WCU,Monthly Consumed RCU (Avg),Monthly Consumed WCU (Avg),Monthly Reads/Sec (Avg),Monthly Writes/Sec (Avg),Read P99 Latency (ms),Write P99 Latency (ms),Streams Enabled,Stream View Type,LSI Count,GSI Count" >> "$OUTPUT_DIR/dynamodb_summary.csv"
+echo "Table Name,Avg Item Size (KB),Total Size (GB),Provisioned RCU,Provisioned WCU,Fourteen Day  Consumed RCU (Avg),Fourteen Day  WCU (Avg),Monthly Reads/Sec (Avg),Monthly Writes/Sec (Avg),Read P99 Latency (ms),Write P99 Latency (ms),Streams Enabled,Stream View Type,LSI Count,GSI Count" >> "$OUTPUT_DIR/dynamodb_summary.csv"
 
 # Log the filters being used
 echo "Filter configuration:" | tee -a "$OUTPUT_DIR/script.log"
@@ -285,14 +285,14 @@ for REGION in $REGIONS; do
             --dimensions Name=TableName,Value="$TABLE" \
             --start-time "$START_DATE_1MONTH" \
             --end-time "$END_DATE" \
-            --period 86400 \
-            --statistics Average \
+            --period 300 \
+            --statistics Maximum \
             --region "$REGION" \
-            --query "Datapoints[*].Average" \
+            --query "Datapoints[*].{Timestamp:Timestamp,MaxRCU:Maximum}" \
             --output json)
         
         # Calculate average monthly consumed RCU
-        MONTHLY_CONSUMED_RCU=$( [-z $MONTHLY_CONSUMED_RCU ] && echo "Monthly Consumed RCU is null"   || echo "$CONSUMED_RCU" | jq -r 'add / length')
+        FOURTEENDAY_CONSUMED_RCU=$( [-z $FOURTEENDAY_CONSUMED_RCU ] && echo "Fourteen Day  Consumed RCU is null"   || echo "$CONSUMED_RCU" | jq -r 'add / length')
         
         # 2. Consumed WCU
         CONSUMED_WCU=$(aws cloudwatch get-metric-statistics \
@@ -301,14 +301,14 @@ for REGION in $REGIONS; do
             --dimensions Name=TableName,Value="$TABLE" \
             --start-time "$START_DATE_1MONTH" \
             --end-time "$END_DATE" \
-            --period 86400 \
-            --statistics Average \
+            --period 300 \
+            --statistics Maximum \
             --region "$REGION" \
-            --query "Datapoints[*].Average" \
+            --query "Datapoints[*].{Timestamp:Timestamp,MaxRCU:Maximum}" \
             --output json)
         
         # Calculate average monthly consumed WCU
-        MONTHLY_CONSUMED_WCU=$( [ -z $MONTHLY_CONSUMED_WCU ] && echo "Monthly Consumed WCU is null " || echo "$CONSUMED_WCU" | jq -r 'add / length')
+        FOURTEENFDAY_CONSUMED_WCU=$( [ -z $FOURTEENDAY_CONSUMED_WCU ] && echo "Monthly Consumed WCU is null " || echo "$CONSUMED_WCU" | jq -r 'add / length')
         
         # 3. Read requests per second
         READ_OPS=$(aws cloudwatch get-metric-statistics \
@@ -317,10 +317,10 @@ for REGION in $REGIONS; do
             --dimensions Name=TableName,Value="$TABLE" Name=Operation,Value=GetItem \
             --start-time "$START_DATE_1MONTH" \
             --end-time "$END_DATE" \
-            --period 86400 \
-            --statistics SampleCount \
+            --period 300 \
+            --statistics Maximum \
             --region "$REGION" \
-            --query "Datapoints[*].SampleCount" \
+            --query "Datapoints[*].{Timestamp:Timestamp,MaxRCU:Maximum}" \
             --output json)
         
         # Calculate average reads per second over the month
@@ -333,7 +333,7 @@ for REGION in $REGIONS; do
             --dimensions Name=TableName,Value="$TABLE" Name=Operation,Value=PutItem \
             --start-time "$START_DATE_1MONTH" \
             --end-time "$END_DATE" \
-            --period 86400 \
+            --period 300 \
             --statistics SampleCount \
             --region "$REGION" \
             --query "Datapoints[*].SampleCount" \
@@ -349,7 +349,7 @@ for REGION in $REGIONS; do
             --dimensions Name=TableName,Value="$TABLE" Name=Operation,Value=GetItem \
             --start-time "$START_DATE_1MONTH" \
             --end-time "$END_DATE" \
-            --period 2592000 \
+            --period 20160 \
             --extended-statistics p99 \
             --region "$REGION" \
             --query "Datapoints[0].p99" \
@@ -362,7 +362,7 @@ for REGION in $REGIONS; do
             --dimensions Name=TableName,Value="$TABLE" Name=Operation,Value=PutItem \
             --start-time "$START_DATE_1MONTH" \
             --end-time "$END_DATE" \
-            --period 2592000 \
+            --period 20160 \
             --extended-statistics p99 \
             --region "$REGION" \
             --query "Datapoints[0].p99" \
