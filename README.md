@@ -25,7 +25,7 @@ This script collects comprehensive sizing and usage metrics for Amazon DynamoDB 
 ## Installation
 1. Download the script:
    ```bash
-   curl -O https://example.com/dynamodb_sizing_script.sh
+   curl -O https://github.com/sgopalakrishnan1980/dynamodbdetails-for-sizing-scylla/blob/main/dynamodb_sizing_script.sh
    ```
 
 2. Make the script executable:
