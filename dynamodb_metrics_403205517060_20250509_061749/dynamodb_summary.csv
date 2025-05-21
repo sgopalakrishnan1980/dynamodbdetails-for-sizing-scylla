@@ -1,0 +1,65 @@
+Table Name,Avg Item Size (KB),Total Size (GB),Provisioned RCU,Provisioned WCU,Fourteen Day  Consumed RCU (Avg),Fourteen Day  WCU (Avg),2 week  Reads/Sec (Avg),2 week Writes/Sec (Avg),Read P99 Latency (ms),Write P99 Latency (ms),Streams Enabled,Stream View Type,LSI Count,GSI Count
+mutator_table,0,0,10,10,{
+    "Label": "SuccessfulRequestLatency",
+    "Datapoints": []
+},{
+    "Label": "SuccessfulRequestLatency",
+    "Datapoints": []
+},{
+    "Label": "SuccessfulRequestLatency",
+    "Datapoints": []
+},{
+    "Label": "SuccessfulRequestLatency",
+    "Datapoints": []
+},{
+    "Label": "SuccessfulRequestLatency",
+    "Datapoints": []
+},,,0,0,N/A,N/A,false,N/A,0,0
+mutator_table,0,0,10,10,{
+    "Label": "SuccessfulRequestLatency",
+    "Datapoints": []
+},{
+    "Label": "SuccessfulRequestLatency",
+    "Datapoints": []
+},{
+    "Label": "SuccessfulRequestLatency",
+    "Datapoints": []
+},{
+    "Label": "SuccessfulRequestLatency",
+    "Datapoints": []
+},{
+    "Label": "SuccessfulRequestLatency",
+    "Datapoints": []
+},,,0,0,N/A,N/A,false,N/A,0,0
+test,0,0,1,1,{
+    "Label": "SuccessfulRequestLatency",
+    "Datapoints": []
+},{
+    "Label": "SuccessfulRequestLatency",
+    "Datapoints": []
+},{
+    "Label": "SuccessfulRequestLatency",
+    "Datapoints": []
+},{
+    "Label": "SuccessfulRequestLatency",
+    "Datapoints": []
+},{
+    "Label": "SuccessfulRequestLatency",
+    "Datapoints": []
+},,,0,0,N/A,N/A,false,N/A,0,0
+test,0,0,1,1,{
+    "Label": "SuccessfulRequestLatency",
+    "Datapoints": []
+},{
+    "Label": "SuccessfulRequestLatency",
+    "Datapoints": []
+},{
+    "Label": "SuccessfulRequestLatency",
+    "Datapoints": []
+},{
+    "Label": "SuccessfulRequestLatency",
+    "Datapoints": []
+},{
+    "Label": "SuccessfulRequestLatency",
+    "Datapoints": []
+},,,0,0,N/A,N/A,false,N/A,0,0

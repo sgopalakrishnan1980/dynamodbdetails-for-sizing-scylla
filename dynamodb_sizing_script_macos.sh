@@ -1,5 +1,5 @@
 #!/bin/bash -x
-# DynamoDB and ScyllaDB Sizing Collection Script
+# DynamoDB and ScyllaDB Sizing Collection Script for macOS
 # This script collects sizing and usage metrics for DynamoDB tables
 
 # Help function
@@ -155,7 +155,8 @@ calculate_avg_item_size() {
     item_count=$(echo "$table_info" | jq -r '.Table.ItemCount')
     table_size_bytes=$(echo "$table_info" | jq -r '.Table.TableSizeBytes')
     
-    # Calculate average item size in KB
+    # Calculate average item size in KB with 2 decimal places using bc
+    # bc is used for precise decimal arithmetic
     if [ "$item_count" -gt 0 ]; then
         avg_item_size=$(echo "scale=2; $table_size_bytes / $item_count / 1024" | bc)
     else
@@ -220,8 +221,8 @@ for REGION in $REGIONS; do
         # Get table description
         TABLE_INFO=$(aws dynamodb describe-table --table-name "$TABLE" --region "$REGION")
         
-	echo $(echo "$TABLE_INFO"  | jq -r '.Table.TableSizeBytes') 
-	# Extract table size in GB
+        echo $(echo "$TABLE_INFO"  | jq -r '.Table.TableSizeBytes') 
+        # Extract table size in GB with 2 decimal places using bc
         TABLE_SIZE_BYTES=$(echo "$TABLE_INFO" | jq -r '.Table.TableSizeBytes')
         TABLE_SIZE_GB=$(echo "scale=2; $TABLE_SIZE_BYTES / (1024*1024*1024)" | bc)
         
@@ -271,99 +272,87 @@ for REGION in $REGIONS; do
             done
         fi
 
-#Data points with a period of less than 60 seconds: Available for 3 hours
-#Data points with a period of 60 seconds (1 minute): Available for 15 days
-#Data points with a period of 300 seconds (5 minutes): Available for 63 days
-#Data points with a period of 3600 seconds (1 hour): Available for 455 days (15 months)
- 	get_dynamodb_metrics() {
-
-  	#local TABLE_NAME="$1"
-  
-  	# Operations to monitor
-  	local READ_OPS=("GetItem" "BatchGetItem" "Scan")
-  	local WRITE_OPS=("PutItem" "BatchWriteItem")
-  
-  	# Time windows to analyze (in seconds)
-  	local TIME_WINDOWS=("10800:3hours" "1296000:15days" "3888000:45days")
-  
-  	for window in "${TIME_WINDOWS[@]}"; do
-    	# Split the window string into seconds and name
-    	IFS=":" read -r seconds name <<< "$window"
-    
-    	# Calculate start time based on the window
-    	local end_time=$(date '+%Y-%m-%dT%H:%M:%S')
-    	local start_time=$(date -d "@$(($(date +%s) - $seconds))" '+%Y-%m-%dT%H:%M:%S')
-    
-    	echo "Processing time window: $name ($start_time to $end_time)"
-    
-    	# Create output directory if it doesn't exist
-    	#mkdir -p "dynamodb_metrics"
-    
-    	# Process read operations
-    	for op in "${READ_OPS[@]}"; do
-		touch "$OUTPUT_DIR"/"${TABLE}_${op}_${name}.json"
-      		output_file="./$OUTPUT_DIR"/"${TABLE}_${op}_${name}.json"
-#      		output_file="dynamodb_metrics/${TABLE}_${op}_${name}.json"
-      		echo "Retrieving $op metrics for $name window..."
-
-	        endtimegranular="$(date '+%Y-%m-%d %H:%M:%S')"
-	        starttimegranular="$(date -d "1440 seconds ago" '+%Y-%m-%d %H:%M:%S')"
-	        x=1200
-	        while x < 108000; do 
-		      local starttimegranular="$(date -d "$x seconds ago" '+%Y-%m-%d %H:%M:%S')"
-              
-       		  aws cloudwatch get-metric-statistics \
-        	  --namespace AWS/DynamoDB \
-        	  --metric-name ${op}RequestCount \
-        	  --start-time "$starttimegranular" \
-        	  --end-time "$endtimegranular" \
-        	  --period 1 \
-        	  --statistics Sum \
-        	  --dimensions Name=TableName,Value="$TABLE" \
-        	  --query 'Datapoints[*].{Timestamp:Timestamp,RequestCount:Sum}' \
-        	  --output json >> "$output_file"
-	
-		  starttimegranlar="$endtimegranular"
-	          echo "enditme:$endtimegranular startime:$starttimegranular counter:$x"
-		  sleep 30
-		  
-		  x = $(eval $x + 1200)       
-      		  echo "Saved to $output_file"
+        # Function to get DynamoDB metrics with macOS-compatible date handling
+        get_dynamodb_metrics() {
+            # Operations to monitor
+            local READ_OPS=("GetItem" "BatchGetItem" "Scan")
+            local WRITE_OPS=("PutItem" "BatchWriteItem")
+            
+            # Time windows to analyze (in seconds)
+            local TIME_WINDOWS=("10800:3hours" "1296000:15days" "3888000:45days")
+            
+            for window in "${TIME_WINDOWS[@]}"; do
+                # Split the window string into seconds and name
+                IFS=":" read -r seconds name <<< "$window"
+                
+                # Calculate start time based on the window (macOS compatible)
+                local end_time=$(date '+%Y-%m-%dT%H:%M:%S')
+                local start_time=$(date -v-${seconds}S '+%Y-%m-%dT%H:%M:%S')
+                
+                echo "Processing time window: $name ($start_time to $end_time)"
+                
+                # Process read operations
+                for op in "${READ_OPS[@]}"; do
+                    touch "$OUTPUT_DIR"/"${TABLE}_${op}_${name}.json"
+                    output_file="./$OUTPUT_DIR"/"${TABLE}_${op}_${name}.json"
+                    echo "Retrieving $op metrics for $name window..."
+                    
+                    endtimegranular="$(date '+%Y-%m-%d %H:%M:%S')"
+                    starttimegranular="$(date -v-1440S '+%Y-%m-%d %H:%M:%S')"
+                    x=1200
+                    while [ $x -lt 108000 ]; do
+                        local starttimegranular="$(date -v-${x}S '+%Y-%m-%d %H:%M:%S')"
+                        
+                        aws cloudwatch get-metric-statistics \
+                        --namespace AWS/DynamoDB \
+                        --metric-name ${op}RequestCount \
+                        --start-time "$starttimegranular" \
+                        --end-time "$endtimegranular" \
+                        --period 1 \
+                        --statistics Sum \
+                        --dimensions Name=TableName,Value="$TABLE" \
+                        --query 'Datapoints[*].{Timestamp:Timestamp,RequestCount:Sum}' \
+                        --output json >> "$output_file"
+                        
+                        starttimegranlar="$endtimegranular"
+                        echo "endtime:$endtimegranular startime:$starttimegranular counter:$x"
+                        sleep 30
+                        
+                        x=$((x + 1200))
+                        echo "Saved to $output_file"
+                    done
                 done
-    
-    	# Process write operations
-    	    for op in "${WRITE_OPS[@]}"; do
-      		  output_file="dynamodb_metrics/${TABLE}_${op}_${name}.json"
-      		  echo "Retrieving $op metrics for $name window..."
-      
-      	      aws cloudwatch get-metric-statistics \
-        	  --namespace AWS/DynamoDB \
-        	  --metric-name ${op}RequestCount \
-        	  --start-time "$start_time" \
-        	  --end-time "$end_time" \
-        	  --period 1 \
-        	  --statistics Sum \
-        	  --dimensions Name=TableName,Value="$TABLE" \
-        	  --query 'Datapoints[*].{Timestamp:Timestamp,RequestCount:Sum}' \
-        	  --output json > "$output_file"
-      
-      	      echo "Saved to $output_file"
+                
+                # Process write operations
+                for op in "${WRITE_OPS[@]}"; do
+                    output_file="dynamodb_metrics/${TABLE}_${op}_${name}.json"
+                    echo "Retrieving $op metrics for $name window..."
+                    
+                    aws cloudwatch get-metric-statistics \
+                    --namespace AWS/DynamoDB \
+                    --metric-name ${op}RequestCount \
+                    --start-time "$start_time" \
+                    --end-time "$end_time" \
+                    --period 1 \
+                    --statistics Sum \
+                    --dimensions Name=TableName,Value="$TABLE" \
+                    --query 'Datapoints[*].{Timestamp:Timestamp,RequestCount:Sum}' \
+                    --output json > "$output_file"
+                    
+                    echo "Saved to $output_file"
+                done
             done
-        done
-    done
-}
-	get_dynamodb_metrics "$TABLE"
-
+        }
         
-	#initialize start and end time
-
-
-	START_DATE_1MONTH=$(date -u -d "14 days ago" +"%Y-%m-%dT%H:%M:%SZ")
-	END_DATE=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-
-	echo "Start time set to $START_DATE_1MONTH" >> "$OUTPUT_DIR/script.log" 
-	echo "End time set to $END_DATE " >> "$OUTPUT_DIR/script.log"
-
+        get_dynamodb_metrics "$TABLE"
+        
+        # Initialize start and end time (macOS compatible)
+        START_DATE_1MONTH=$(date -v-14d '+%Y-%m-%dT%H:%M:%SZ')
+        END_DATE=$(date '+%Y-%m-%dT%H:%M:%SZ')
+        
+        echo "Start time set to $START_DATE_1MONTH" >> "$OUTPUT_DIR/script.log" 
+        echo "End time set to $END_DATE " >> "$OUTPUT_DIR/script.log"
+        
         # Get CloudWatch metrics for the last month
         # 1. Consumed RCU
         CONSUMED_RCU=$(aws cloudwatch get-metric-statistics \
@@ -378,7 +367,7 @@ for REGION in $REGIONS; do
             --query "Datapoints[*].Maximum" \
             --output json)
         
-	CONSUMED_RCU_DETAIL=$(aws cloudwatch get-metric-statistics \
+        CONSUMED_RCU_DETAIL=$(aws cloudwatch get-metric-statistics \
             --namespace AWS/DynamoDB \
             --metric-name ConsumedReadCapacityUnits \
             --dimensions Name=TableName,Value="$TABLE" \
@@ -389,22 +378,19 @@ for REGION in $REGIONS; do
             --region "$REGION" \
             --query "Datapoints[*].{Timestamp:Timestamp,MaxRCU:Maximum}" \
             --output json)
-	    
-        #Dump all cloudwatchoutput to files 
-	touch "$OUTPUT_DIR"/"$TABLE"_CONSUMED_RCU && echo "$CONSUMED_RCU_DETAIL" >> "$OUTPUT_DIR"/"$TABLE"_CONSUMED_RCU
- 
-        # Calculate average monthly consumed RCU
-	# Assuming CONSUMED_RCU contains JSON array data
-	if [ -z "$CONSUMED_RCU" ] || [ "$CONSUMED_RCU" == "[]" ]; then
-    	   FOURTEENDAY_CONSUMED_RCU=0
-	else
-    	   # Check if we can extract a value and if it's greater than 0
-           EXTRACTED_VALUE=$(echo "$CONSUMED_RCU" | jq -r 'if length > 0 then max else 0 end') 
-	   #sleep 5 && echo $EXTRACTED_VALUE
-           FOURTEENDAY_CONSUMED_RCU=$([ $EXTRACTED_VALUE -gt 0 ] && echo "$EXTRACTED_VALUE" || echo "$CONSUMED_RCU" | jq -r 'if length > 0 then add / length else 0 end')
-	fi
         
-	#FOURTEENDAY_CONSUMED_RCU=$( [-z $FOURTEENDAY_CONSUMED_RCU ] && echo "Fourteen Day  Consumed RCU is null"   || echo "$CONSUMED_RCU" | jq -r 'add / length')
+        # Dump all cloudwatch output to files 
+        touch "$OUTPUT_DIR"/"$TABLE"_CONSUMED_RCU && echo "$CONSUMED_RCU_DETAIL" >> "$OUTPUT_DIR"/"$TABLE"_CONSUMED_RCU
+        
+        # Calculate average monthly consumed RCU with proper decimal handling
+        if [ -z "$CONSUMED_RCU" ] || [ "$CONSUMED_RCU" == "[]" ]; then
+            FOURTEENDAY_CONSUMED_RCU=0
+        else
+            # Extract maximum value with 2 decimal places
+            EXTRACTED_VALUE=$(echo "$CONSUMED_RCU" | jq -r 'if length > 0 then max else 0 end')
+            # Use bc for precise decimal arithmetic
+            FOURTEENDAY_CONSUMED_RCU=$(echo "scale=2; $([ $EXTRACTED_VALUE -gt 0 ] && echo "$EXTRACTED_VALUE" || echo "$CONSUMED_RCU" | jq -r 'if length > 0 then add / length else 0 end')" | bc)
+        fi
         
         # 2. Consumed WCU
         CONSUMED_WCU=$(aws cloudwatch get-metric-statistics \
@@ -418,10 +404,12 @@ for REGION in $REGIONS; do
             --region "$REGION" \
             --query "Datapoints[*].{Timestamp:Timestamp,MaxWCU:Maximum}" \
             --output json)
-	    
+        
         touch "$OUTPUT_DIR"/"$TABLE"_CONSUMED_WCU && echo "$CONSUMED_WCU" >> "$OUTPUT_DIR"/"$TABLE"_CONSUMED_WCU
-        # Calculate average monthly consumed WCU
-        FOURTEENFDAY_CONSUMED_WCU=$( [ -z $FOURTEENDAY_CONSUMED_WCU ] && echo "Monthly Consumed WCU is null " || echo "$CONSUMED_WCU" | jq -r 'add / length')
+        
+        # Calculate average monthly consumed WCU with proper decimal handling
+        # Use bc for precise decimal arithmetic with 2 decimal places
+        FOURTEENFDAY_CONSUMED_WCU=$(echo "scale=2; $([ -z $FOURTEENDAY_CONSUMED_WCU ] && echo "0" || echo "$CONSUMED_WCU" | jq -r 'add / length')" | bc)
         
         # 3. Read requests per second
         READ_OPS=$(aws cloudwatch get-metric-statistics \
@@ -435,12 +423,12 @@ for REGION in $REGIONS; do
             --region "$REGION" \
             --query "Datapoints[*].SampleCount" \
             --output json)
-
+        
         touch "$OUTPUT_DIR"/"$TABLE"_GETITEM_HISTORY && echo "$READ_OPS" >> "$OUTPUT_DIR"/"$TABLE"_GETITEM_HISTORY
         
-        # Calculate average reads per second over the 14 DAYS
-        #sleep 5 && echo $READ_OPS
-	MONTHLY_READS_PER_SEC=$( [-z $READ_OPS] && echo "READs per second is null " ||  [ $READ_OPS -eq 0 ] && echo "$READ_OPS" | jq -r 'add / length / 86400' || echo "0" )
+        # Calculate average reads per second over the 14 DAYS with proper decimal handling
+        # Use bc for precise decimal arithmetic with 2 decimal places
+        MONTHLY_READS_PER_SEC=$(echo "scale=2; $([ -z "$READ_OPS" ] && echo "0" || [ "$READ_OPS" -eq 0 ] && echo "$READ_OPS" | jq -r 'add / length / 86400' || echo "0")" | bc)
         
         # 4. Write requests per second
         WRITE_OPS=$(aws cloudwatch get-metric-statistics \
@@ -454,15 +442,15 @@ for REGION in $REGIONS; do
             --region "$REGION" \
             --query "Datapoints[*].SampleCount" \
             --output json)
-
+        
         touch "$OUTPUT_DIR"/"$TABLE"_PUTITEM_HISTORY && echo "$WRITE_OPS" >> "$OUTPUT_DIR"/"$TABLE"_PUTITEM_HISTORY
         
-        # Calculate average writes per second over the month
-        #sleep 5 && echo $WRITE_OPS
-	MONTHLY_WRITES_PER_SEC=$( [-z $WRITE_OPS ]  && echo "0" || [$WRITE_OPS -eq 0 ] && echo "$WRITE_OPS" | jq -r 'add / length / 86400'|| echo "0" )
+        # Calculate average writes per second over the month with proper decimal handling
+        # Use bc for precise decimal arithmetic with 2 decimal places
+        MONTHLY_WRITES_PER_SEC=$(echo "scale=2; $([ -z "$WRITE_OPS" ] && echo "0" || [ "$WRITE_OPS" -eq 0 ] && echo "$WRITE_OPS" | jq -r 'add / length / 86400' || echo "0")" | bc)
         
         # 5. P99 Read Latency
-        READ_P99_LATENCY=$(aws cloudwatch get-metric-statistics \
+        READ_P99_LATENCY=$(echo "scale=2; $(aws cloudwatch get-metric-statistics \
             --namespace AWS/DynamoDB \
             --metric-name SuccessfulRequestLatency \
             --dimensions Name=TableName,Value="$TABLE" Name=Operation,Value=GetItem \
@@ -472,12 +460,12 @@ for REGION in $REGIONS; do
             --extended-statistics p99 \
             --region "$REGION" \
             --query "Datapoints[0].p99" \
-            --output text)
-
-	touch "$OUTPUT_DIR"/"$TABLE"_GETITEM_READP99_HISTORY &&  echo "$READ_P99_LATENCY" >> "$OUTPUT_DIR"/"$TABLE"_GETITEM_READP99_HISTORY
- 
+            --output text)" | bc)
+        
+        touch "$OUTPUT_DIR"/"$TABLE"_GETITEM_READP99_HISTORY && echo "$READ_P99_LATENCY" >> "$OUTPUT_DIR"/"$TABLE"_GETITEM_READP99_HISTORY
+        
         # 6. P99 Write Latency
-        WRITE_P99_LATENCY=$(aws cloudwatch get-metric-statistics \
+        WRITE_P99_LATENCY=$(echo "scale=2; $(aws cloudwatch get-metric-statistics \
             --namespace AWS/DynamoDB \
             --metric-name SuccessfulRequestLatency \
             --dimensions Name=TableName,Value="$TABLE" Name=Operation,Value=PutItem \
@@ -487,81 +475,67 @@ for REGION in $REGIONS; do
             --extended-statistics p99 \
             --region "$REGION" \
             --query "Datapoints[0].p99" \
-            --output text)
-
-         touch "$OUTPUT_DIR"/"$TABLE"_PUTITEM_WRITEP99_HISTORY && echo "$WRITE_P99_LATENCY" >> "$OUTPUT_DIR"/"$TABLE"_PUTITEM_WRITEP99_HISTORY
-
-	 #Sum of all successfull requests 
-	 SUMREQUESTS14DAYS=$(aws cloudwatch get-metric-statistics \
-  	 --namespace AWS/DynamoDB \
-         --metric-name SuccessfulRequestLatency \
-         --dimensions Name=TableName,Value="$TABLE" \
-         --start-time $(date -u -d "14 days ago" +"%Y-%m-%dT%H:%M:%SZ") \
-         --end-time $(date -u +"%Y-%m-%dT%H:%M:%SZ") \
-         --period 1209600 \
-         --statistics SampleCount \
-	 --region $REGION )
+            --output text)" | bc)
         
-	 #Sum of all successfull requests 
-	 SUMREQUESTS7DAYS=$(aws cloudwatch get-metric-statistics \
-  	 --namespace AWS/DynamoDB \
-         --metric-name SuccessfulRequestLatency \
-         --dimensions Name=TableName,Value="$TABLE" \
-	 --start-time $(date -u -d "7 days ago"  +"%Y-%m-%dT%H:%M:%SZ") \
-         --end-time $(date -u +"%Y-%m-%dT%H:%M:%SZ") \
-         --period 604800 \
-         --statistics SampleCount \
-	 --region $REGION )
+        touch "$OUTPUT_DIR"/"$TABLE"_PUTITEM_WRITEP99_HISTORY && echo "$WRITE_P99_LATENCY" >> "$OUTPUT_DIR"/"$TABLE"_PUTITEM_WRITEP99_HISTORY
         
-	 #Sum of all successfull requests 
-	 SUMREQUESTS1DAYS=$(aws cloudwatch get-metric-statistics \
-  	 --namespace AWS/DynamoDB \
-         --metric-name SuccessfulRequestLatency \
-         --dimensions Name=TableName,Value="$TABLE" \
-         --start-time $(date -u -d "1 days ago" +"%Y-%m-%dT%H:%M:%SZ") \
-         --end-time $(date -u +"%Y-%m-%dT%H:%M:%SZ") \
-         --period 86400 \
-         --statistics SampleCount \
-	 --region $REGION )
-	 
-	 #Sum of all successfull requests 
-	 SUMREQUESTS12HOURS=$(aws cloudwatch get-metric-statistics \
-  	 --namespace AWS/DynamoDB \
-         --metric-name SuccessfulRequestLatency \
-         --dimensions Name=TableName,Value="$TABLE" \
-	 --start-time $(date -u -d "12 hours ago"  +"%Y-%m-%dT%H:%M:%SZ")\
-         --end-time $(date -u +"%Y-%m-%dT%H:%M:%SZ") \
-         --period 43200 \
-         --statistics SampleCount \
-	 --region $REGION )
-
-	 #Sum of all successfull requests 
-	 SUMREQUESTS1HOURS=$(aws cloudwatch get-metric-statistics \
-  	 --namespace AWS/DynamoDB \
-         --metric-name SuccessfulRequestLatency \
-         --dimensions Name=TableName,Value="$TABLE" \
-	 --start-time $(date -u -d "1 hours ago"  +"%Y-%m-%dT%H:%M:%SZ")\
-         --end-time $(date -u +"%Y-%m-%dT%H:%M:%SZ") \
-         --period 3600 \
-         --statistics SampleCount \
-	 --region $REGION )
-	 
-
+        # Sum of all successful requests (macOS compatible date handling)
+        SUMREQUESTS14DAYS=$(aws cloudwatch get-metric-statistics \
+            --namespace AWS/DynamoDB \
+            --metric-name SuccessfulRequestLatency \
+            --dimensions Name=TableName,Value="$TABLE" \
+            --start-time $(date -v-14d '+%Y-%m-%dT%H:%M:%SZ') \
+            --end-time $(date '+%Y-%m-%dT%H:%M:%SZ') \
+            --period 1209600 \
+            --statistics SampleCount \
+            --region $REGION)
+        
+        SUMREQUESTS7DAYS=$(aws cloudwatch get-metric-statistics \
+            --namespace AWS/DynamoDB \
+            --metric-name SuccessfulRequestLatency \
+            --dimensions Name=TableName,Value="$TABLE" \
+            --start-time $(date -v-7d '+%Y-%m-%dT%H:%M:%SZ') \
+            --end-time $(date '+%Y-%m-%dT%H:%M:%SZ') \
+            --period 604800 \
+            --statistics SampleCount \
+            --region $REGION)
+        
+        SUMREQUESTS1DAYS=$(aws cloudwatch get-metric-statistics \
+            --namespace AWS/DynamoDB \
+            --metric-name SuccessfulRequestLatency \
+            --dimensions Name=TableName,Value="$TABLE" \
+            --start-time $(date -v-1d '+%Y-%m-%dT%H:%M:%SZ') \
+            --end-time $(date '+%Y-%m-%dT%H:%M:%SZ') \
+            --period 86400 \
+            --statistics SampleCount \
+            --region $REGION)
+        
+        SUMREQUESTS12HOURS=$(aws cloudwatch get-metric-statistics \
+            --namespace AWS/DynamoDB \
+            --metric-name SuccessfulRequestLatency \
+            --dimensions Name=TableName,Value="$TABLE" \
+            --start-time $(date -v-12H '+%Y-%m-%dT%H:%M:%SZ') \
+            --end-time $(date '+%Y-%m-%dT%H:%M:%SZ') \
+            --period 43200 \
+            --statistics SampleCount \
+            --region $REGION)
+        
+        SUMREQUESTS1HOURS=$(aws cloudwatch get-metric-statistics \
+            --namespace AWS/DynamoDB \
+            --metric-name SuccessfulRequestLatency \
+            --dimensions Name=TableName,Value="$TABLE" \
+            --start-time $(date -v-1H '+%Y-%m-%dT%H:%M:%SZ') \
+            --end-time $(date '+%Y-%m-%dT%H:%M:%SZ') \
+            --period 3600 \
+            --statistics SampleCount \
+            --region $REGION)
+        
         # Handle null or missing values
         [ "$READ_P99_LATENCY" == "None" ] && READ_P99_LATENCY="N/A"
         [ "$WRITE_P99_LATENCY" == "None" ] && WRITE_P99_LATENCY="N/A"
         
         # Add to summary CSV
-        echo "$TABLE,$AVG_ITEM_SIZE,$TABLE_SIZE_GB,$PROV_RCU,$PROV_WCU,$SUMREQUESTS1HOURS,$SUMREQUESTS12HOURS,$SUMREQUESTS1DAYS,$SUMREQUESTS7DAYS,$SUMREQUESTS14DAYS,$MONTHLY_CONSUMED_RCU,$MONTHLY_CONSUMED_WCU,$MONTHLY_READS_PER_SEC,$MONTHLY_WRITES_PER_SEC,$READ_P99_LATENCY,$WRITE_P99_LATENCY,$STREAM_ENABLED,$STREAM_VIEW_TYPE,$LSI_COUNT,$GSI_COUNT" >> "$SUMMARY_FILE"
-        
-        # Store detailed info in JSON
-
-        # Handle null or missing values
-        [ "$READ_P99_LATENCY" == "None" ] && READ_P99_LATENCY="N/A"
-        [ "$WRITE_P99_LATENCY" == "None" ] && WRITE_P99_LATENCY="N/A"
-        
-        # Add to summary CSV
-        echo "$TABLE,$AVG_ITEM_SIZE,$TABLE_SIZE_GB,$PROV_RCU,$PROV_WCU,$SUMREQUESTS1HOURS,$SUMREQUESTS12HOURS,$SUMREQUESTS1DAYS,$SUMREQUESTS7DAYS,$SUMREQUESTS14DAYS,$MONTHLY_CONSUMED_RCU,$MONTHLY_CONSUMED_WCU,$MONTHLY_READS_PER_SEC,$MONTHLY_WRITES_PER_SEC,$READ_P99_LATENCY,$WRITE_P99_LATENCY,$STREAM_ENABLED,$STREAM_VIEW_TYPE,$LSI_COUNT,$GSI_COUNT" >> "$SUMMARY_FILE"
+        echo "$TABLE,$AVG_ITEM_SIZE,$TABLE_SIZE_GB,$PROV_RCU,$PROV_WCU,$SUMREQUESTS1HOURS,$SUMREQUESTS12HOURS,$SUMREQUESTS1DAYS,$SUMREQUESTS7DAYS,$SUMREQUESTS14DAYS,$FOURTEENDAY_CONSUMED_RCU,$FOURTEENFDAY_CONSUMED_WCU,$MONTHLY_READS_PER_SEC,$MONTHLY_WRITES_PER_SEC,$READ_P99_LATENCY,$WRITE_P99_LATENCY,$STREAM_ENABLED,$STREAM_VIEW_TYPE,$LSI_COUNT,$GSI_COUNT" >> "$SUMMARY_FILE"
         
         # Store detailed info in JSON
         TABLE_DETAILED=$(cat <<EOF
@@ -572,13 +546,13 @@ for REGION in $REGIONS; do
   "tableSizeGB": $TABLE_SIZE_GB,
   "provisionedRCU": "$PROV_RCU",
   "provisionedWCU": "$PROV_WCU",
-  "sumrequests1hour: "$SUMREQUESTS1HOURS",
-  "sumrequests12hour: "$SUMREQUESTS12HOURS",
-  "sumrequests1day: "$SUMREQUESTS1DAYS",
-  "sumrequests7days: "$SUMREQUESTS7DAYS",
-  "sumrequests14days: "$SUMREQUESTS14DAYS",
-  "monthlyConsumedRCU": $MONTHLY_CONSUMED_RCU,
-  "monthlyConsumedWCU": $MONTHLY_CONSUMED_WCU,
+  "sumrequests1hour": "$SUMREQUESTS1HOURS",
+  "sumrequests12hour": "$SUMREQUESTS12HOURS",
+  "sumrequests1day": "$SUMREQUESTS1DAYS",
+  "sumrequests7days": "$SUMREQUESTS7DAYS",
+  "sumrequests14days": "$SUMREQUESTS14DAYS",
+  "monthlyConsumedRCU": $FOURTEENDAY_CONSUMED_RCU,
+  "monthlyConsumedWCU": $FOURTEENFDAY_CONSUMED_WCU,
   "monthlyReadsPerSec": $MONTHLY_READS_PER_SEC,
   "monthlyWritesPerSec": $MONTHLY_WRITES_PER_SEC,
   "readP99LatencyMS": "$READ_P99_LATENCY",
@@ -590,7 +564,7 @@ for REGION in $REGIONS; do
   "account": "$ACCOUNT_NUMBER"
 EOF
 )
-
+        
         # Add GSI details if available
         if [ -n "$GSI_INFO" ]; then
             TABLE_DETAILED="${TABLE_DETAILED},
@@ -600,7 +574,7 @@ EOF
         # Close the JSON object
         TABLE_DETAILED="${TABLE_DETAILED}
 }"
-
+        
         echo "$TABLE_DETAILED" >> "$DETAILED_FILE"
         
         # Create a separate file for each table with GSI details if GSIs exist
@@ -712,4 +686,4 @@ elif [ -n "$TABLE_PREFIX" ] || [ -n "$TABLE_POSTFIX" ]; then
 fi
 
 echo "Summary report: $SUMMARY_FILE"
-echo "Detailed data: $DETAILED_FILE"
+echo "Detailed data: $DETAILED_FILE" 
