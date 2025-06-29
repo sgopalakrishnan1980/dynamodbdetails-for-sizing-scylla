@@ -1,15 +1,20 @@
-# DynamoDB Metrics Collection Script
+# DynamoDB Metrics Collection and Sizing Scripts
 
-A comprehensive script for collecting DynamoDB table metrics and performance data to assist with capacity planning and performance analysis.
+A comprehensive collection of scripts for analyzing DynamoDB tables, collecting performance metrics, and assisting with capacity planning and migration to ScyllaDB.
 
 ## Overview
 
-This script collects detailed metrics from DynamoDB tables including:
-- Table details and configuration information
-- CloudWatch metrics for read/write operations
-- Sample counts and P99 latency measurements
-- Multi-region support
-- Comprehensive logging and error handling
+This repository contains multiple scripts designed to help with DynamoDB analysis and sizing:
+
+### Metrics Collection Scripts
+- **`dynamo_metrics_collection.sh`** (Linux/Unix) - Collects detailed CloudWatch metrics
+- **`dynamo_metrics_collection_mac.sh`** (macOS) - macOS-compatible metrics collection
+
+### Sizing and Capacity Planning Scripts
+- **`dynamodb_sizing_script.sh`** (Linux/Unix) - Comprehensive sizing analysis with multiple time windows
+- **`dynamodb_sizing_script_mac.sh`** (macOS) - macOS-compatible sizing script
+- **`dynamodb_sizing_script_macos.sh`** (macOS) - Alternative macOS sizing script
+- **`dynamodb_sizing_basic-7day.sh`** (Linux/Unix) - Simplified 7-day analysis
 
 ## Prerequisites
 
@@ -25,30 +30,34 @@ This script collects detailed metrics from DynamoDB tables including:
 1. Clone the repository
 2. Make the scripts executable:
 ```bash
-chmod +x dynamo_metrics_collection.sh
-chmod +x dynamo_metrics_collection_mac.sh
+chmod +x *.sh
 ```
 
-## Usage
+## Script Categories
 
-### Linux/Unix Version
+### 1. Metrics Collection Scripts
+
+These scripts collect detailed CloudWatch metrics for DynamoDB tables including sample counts and P99 latency measurements.
+
+#### Usage
+
+**Linux/Unix Version:**
 ```bash
 ./dynamo_metrics_collection.sh [options]
 ```
 
-### macOS Version
+**macOS Version:**
 ```bash
 ./dynamo_metrics_collection_mac.sh [options]
 ```
 
-### Options
-
+#### Options
 - `-t <table_name>`  Optional: Specific table to process. If not provided, all tables will be processed.
 - `-p <aws_profile>` Optional: AWS profile to use
 - `-r <regions>`     Optional: Comma-separated list of regions to process. If not provided, uses current region.
+- `-I`               Optional: Use EC2 Instance Profile for authentication
 
-### Examples
-
+#### Examples
 ```bash
 # Process all tables in current region
 ./dynamo_metrics_collection.sh
@@ -61,6 +70,50 @@ chmod +x dynamo_metrics_collection_mac.sh
 
 # Process 'mytable' in specified regions with custom profile
 ./dynamo_metrics_collection.sh -t mytable -r us-east-1,us-west-2 -p my-aws-profile
+```
+
+### 2. Sizing and Capacity Planning Scripts
+
+These scripts provide comprehensive analysis for capacity planning and migration to ScyllaDB.
+
+#### Usage
+
+**Comprehensive Sizing (Linux/Unix):**
+```bash
+./dynamodb_sizing_script.sh [options]
+```
+
+**Basic 7-Day Analysis (Linux/Unix):**
+```bash
+./dynamodb_sizing_basic-7day.sh [options]
+```
+
+**macOS Versions:**
+```bash
+./dynamodb_sizing_script_mac.sh [options]
+./dynamodb_sizing_script_macos.sh [options]
+```
+
+#### Options
+- `-h, --help`     Show help message
+- `-pre PREFIX`    Filter tables by prefix
+- `-post POSTFIX`  Filter tables by postfix
+- `-both`          Use both prefix and postfix filters
+- `-all`           Process all tables (ignore filters)
+- `-p PROFILE`     AWS profile to use
+- `-a ACCOUNT`     AWS account number
+- `-d DAYS`        Number of days to analyze (default: 7)
+
+#### Examples
+```bash
+# Process tables with 'dev-' prefix and '-prod' suffix
+./dynamodb_sizing_script.sh -pre dev- -post -prod
+
+# Process all tables with custom profile
+./dynamodb_sizing_script.sh -all -p myprofile -a 123456789012
+
+# Analyze last 45 days for test tables
+./dynamodb_sizing_script.sh -pre test- -d 45
 ```
 
 ## Script Flow
@@ -106,8 +159,8 @@ chmod +x dynamo_metrics_collection_mac.sh
 |    Sample Counts |
 | 3. Collect P99   |
 |    Latency       |
-| 4. Process 8     |
-|    Time Windows  |
+| 4. Process Time  |
+|    Windows       |
 +------------------+
          |
          v
@@ -124,7 +177,8 @@ chmod +x dynamo_metrics_collection_mac.sh
 
 ## Output Structure
 
-The script creates a `dynamo_metrics_logs` directory containing:
+### Metrics Collection Scripts
+The metrics collection scripts create a `dynamo_metrics_logs` directory containing:
 
 ```
 dynamo_metrics_logs/
@@ -163,6 +217,19 @@ dynamo_metrics_logs/
             └── *.log
 ```
 
+### Sizing Scripts
+The sizing scripts create a `logs` directory containing:
+
+```
+logs/
+├── dynamodb_sizing_YYYYMMDD_HHMMSS.log
+└── {table_name}_analysis/
+    ├── table_details.json
+    ├── metrics_summary.txt
+    ├── capacity_analysis.txt
+    └── scylla_migration_guide.txt
+```
+
 ## Key Features
 
 ### Multi-Region Support
@@ -179,8 +246,14 @@ dynamo_metrics_logs/
 ### Metrics Collection
 - **Sample Counts**: Number of successful requests for each operation
 - **P99 Latency**: 99th percentile latency measurements
-- **Time Windows**: 8 iterations covering 3 hours of data
+- **Time Windows**: Multiple time periods (3 hours, 24 hours, 7 days, 30 days)
 - **Operations**: GetItem, Query, Scan, PutItem, UpdateItem, DeleteItem
+
+### Sizing Analysis
+- **Capacity Planning**: Detailed analysis for ScyllaDB migration
+- **Performance Metrics**: Comprehensive performance analysis
+- **Cost Analysis**: Cost comparison between DynamoDB and ScyllaDB
+- **Migration Guidance**: Step-by-step migration recommendations
 
 ### Performance Optimizations
 - Background processing for parallel AWS calls
@@ -190,34 +263,53 @@ dynamo_metrics_logs/
 
 ## Key Functions
 
-### `get_sample_counts`
+### Metrics Collection Scripts
+
+#### `get_sample_counts`
 - Collects SampleCount statistics for all operations
 - Processes read and write operations separately
 - Creates organized directory structure
 - Background processing for parallel execution
 
-### `get_p99_latency`
+#### `get_p99_latency`
 - Collects P99 latency measurements
 - Uses extended statistics for percentile data
 - Separate processing for read/write operations
 - Timestamp-based file naming
 
-### `check_aws_credentials`
+#### `check_aws_credentials`
 - Validates AWS credentials and permissions
 - Supports AWS profiles
 - EC2 instance profile detection
 - Comprehensive error reporting
 
-### `get_default_region`
+#### `get_default_region`
 - Multiple region detection methods
 - Environment variable support
 - AWS CLI configuration fallback
 - Instance metadata support
 
+### Sizing Scripts
+
+#### `setup_aws_config`
+- Configures AWS credentials and profile
+- Validates account access
+- Sets up region configuration
+
+#### `analyze_table_capacity`
+- Analyzes table capacity requirements
+- Calculates read/write capacity units
+- Provides ScyllaDB sizing recommendations
+
+#### `generate_migration_plan`
+- Creates detailed migration plan
+- Includes cost analysis
+- Provides step-by-step guidance
+
 ## Performance Considerations
 
-1. **Time Windows**: 8 iterations of 20-minute periods
-2. **Period**: 1-second granularity for detailed metrics
+1. **Time Windows**: Multiple time periods for comprehensive analysis
+2. **Period**: Configurable granularity (1 second to 1 hour)
 3. **Parallel Processing**: Background execution for AWS calls
 4. **Rate Limiting**: Configurable call thresholds with pauses
 5. **File Organization**: Structured output for easy analysis
@@ -233,15 +325,29 @@ dynamo_metrics_logs/
 
 ## Platform Differences
 
-### Linux/Unix Version (`dynamo_metrics_collection.sh`)
+### Linux/Unix Versions
 - Uses `date -d` for time calculations
 - Standard Linux date command syntax
 - Full multi-region support
 
-### macOS Version (`dynamo_metrics_collection_mac.sh`)
+### macOS Versions
 - Uses `date -v` for time calculations
 - macOS-compatible date command syntax
-- Same functionality as Linux version
+- Same functionality as Linux versions
+
+## Use Cases
+
+### Metrics Collection Scripts
+- **Performance Monitoring**: Track table performance over time
+- **Capacity Planning**: Understand current usage patterns
+- **Troubleshooting**: Identify performance bottlenecks
+- **Baseline Establishment**: Create performance baselines
+
+### Sizing Scripts
+- **Migration Planning**: Plan DynamoDB to ScyllaDB migration
+- **Capacity Analysis**: Understand resource requirements
+- **Cost Optimization**: Compare costs between platforms
+- **Performance Optimization**: Identify optimization opportunities
 
 ## Recent Updates
 
@@ -254,6 +360,9 @@ dynamo_metrics_logs/
 7. **Rate Limiting**: Configurable thresholds to respect AWS API limits
 8. **Table Filtering**: Process specific tables or all tables
 9. **Comprehensive Metrics**: Sample counts and P99 latency for all operations
+10. **ScyllaDB Migration Support**: Added sizing scripts for migration planning
+11. **Platform Compatibility**: Added macOS-specific versions
+12. **Basic Analysis Option**: Simplified 7-day analysis script
 
 ## Contributing
 
