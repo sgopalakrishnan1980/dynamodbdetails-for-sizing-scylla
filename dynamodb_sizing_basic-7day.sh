@@ -99,6 +99,7 @@ initialize_variables() {
     PARALLEL_PROCESSES=0
     INITIAL_CLOUDWATCH_CALLS=0
     ESTIMATED_SECONDS=0
+    TOTAL_CLOUDWATCH_CALLS=0
     
     # Start time
     START_TIME=$(date +%s)
@@ -109,10 +110,8 @@ initialize_variables() {
     # Time windows (name,start_time,end_time,period)
     declare -gA TIME_WINDOWS
     local current_time=$(date +%s)
-    TIME_WINDOWS["Last 3 hours"]="$((current_time - 10800)),$current_time,60"
-    TIME_WINDOWS["Last 24 hours"]="$((current_time - 86400)),$current_time,300"
-    TIME_WINDOWS["Last 7 days"]="$((current_time - 604800)),$current_time,3600"
-    TIME_WINDOWS["Last 30 days"]="$((current_time - 2592000)),$current_time,3600"
+    TIME_WINDOWS["Last 3 hours"]="$((current_time - 10800)),$current_time,1"  # 1 second period for 3 hours
+    TIME_WINDOWS["Last 7 days"]="$((current_time - 604800)),$current_time,60"  # 1 minute period for 7 days
     
     # Tables to exclude
     EXCLUDE_TABLES=("dynamodb-metrics" "dynamodb-samples")
@@ -347,28 +346,14 @@ increment_cloudwatch_calls() {
     local calls=$1
     local lock_file="$OUTPUT_DIR/cloudwatch_calls.lock"
     (
-        while [ -f "$lock_file" ]; do
-            sleep 0.1
-        done
-        touch "$lock_file"
+        flock -x 200
         TOTAL_CLOUDWATCH_CALLS=$((TOTAL_CLOUDWATCH_CALLS + calls))
-        rm -f "$lock_file"
-    )
+    ) 200>"$lock_file"
 }
 
 # Get CloudWatch calls count
 get_cloudwatch_calls() {
-    local count=$(aws cloudwatch get-metric-statistics \
-        --namespace AWS/DynamoDB \
-        --metric-name SuccessfulRequestLatency \
-        --dimensions Name=TableName,Value=dummy \
-        --start-time 2020-01-01T00:00:00Z \
-        --end-time 2020-01-01T00:01:00Z \
-        --period 60 \
-        --statistics Average \
-        --region "$REGION" 2>&1 | grep -c "RequestId")
-    log "DEBUG" "Current CloudWatch calls: $count"
-    echo "$count"
+    echo "$TOTAL_CLOUDWATCH_CALLS"
 }
 
 # CloudWatch API Call Function
@@ -378,7 +363,7 @@ make_cloudwatch_call() {
     local end_time="$3"
     local period="$4"
     local output_file="$5"
-    local call_number="$6"
+    local table_name="$6"
     
     echo "      - Making CloudWatch call for $operation"
     echo "        Time range: $start_time to $end_time"
@@ -387,71 +372,60 @@ make_cloudwatch_call() {
     local call_counter=0
     local background_jobs=()
     local max_parallel_jobs=8  # For 3-hour window
-    local max_long_window_jobs=50  # For longer windows
     
-    # Process 3-hour window first (last 3 hours)
-    echo "    Processing 3-hour window with $max_parallel_jobs parallel jobs"
-    local current_end_time="$end_time"
-    local x=1200  # 20-minute chunks
-    
-    while [ $x -lt 10800 ]; do
-        # Calculate window times
-        local current_end_epoch=$(date -u -d "$current_end_time" +%s)
-        local window_start_epoch=$((current_end_epoch - x))
-        local window_start=$(date -u -d "@$window_start_epoch" +"%Y-%m-%dT%H:%M:%SZ")
+    # Check if this is a 3-hour window (period = 1)
+    if [ "$period" = "1" ]; then
+        log "INFO" "Processing 3-hour window with $max_parallel_jobs parallel jobs"
+        local current_end_time="$end_time"
+        local chunk_size=1200  # 20 minutes in seconds
         
-        # Wait if we've reached max parallel jobs
-        while [ ${#background_jobs[@]} -ge $max_parallel_jobs ]; do
-            wait -n
-            # Remove completed jobs from array
-            background_jobs=($(jobs -p))
+        # Process in 8 parallel chunks of 20 minutes each
+        for i in {1..8}; do
+            # Calculate window times
+            local current_end_epoch=$(date -u -d "$current_end_time" +%s)
+            local window_start_epoch=$((current_end_epoch - chunk_size))
+            local window_start=$(date -u -d "@$window_start_epoch" +"%Y-%m-%dT%H:%M:%SZ")
+            
+            # Wait if we've reached max parallel jobs
+            while [ ${#background_jobs[@]} -ge $max_parallel_jobs ]; do
+                wait -n
+                # Remove completed jobs from array
+                background_jobs=($(jobs -p))
+            done
+            
+            # Make the CloudWatch call in background
+            make_sample_count_call "$operation" "$window_start" "$current_end_time" "$period" "$output_file" "$table_name" &
+            background_jobs+=($!)
+            call_counter=$((call_counter + 1))
+            
+            # Update for next iteration
+            current_end_time="$window_start"
         done
         
-        # Make the CloudWatch call in background
-        make_sample_count_call "$operation" "$window_start" "$current_end_time" "$period" "$output_file" "$call_counter" &
-        background_jobs+=($!)
-        call_counter=$((call_counter + 1))
+        # Wait for all jobs to complete
+        wait
         
-        # Update for next iteration
-        current_end_time="$window_start"
-        x=$((x + 1200))
-    done
-    
-    # Process remaining time window with higher parallelism
-    echo "    Processing remaining time window with $max_long_window_jobs parallel jobs"
-    local remaining_start_time="$start_time"
-    local end_epoch=$(date -u -d "$end_time" +%s)
-    local remaining_end_epoch=$((end_epoch - 10800))  # 3 hours in seconds
-    local remaining_end_time=$(date -u -d "@$remaining_end_epoch" +"%Y-%m-%dT%H:%M:%SZ")
-    local window_size="5 days"  # 5 days per window
-    
-    while [ "$(date -u -d "$remaining_start_time" +%s)" -lt "$remaining_end_epoch" ]; do
-        # Calculate window times
-        local start_epoch=$(date -u -d "$remaining_start_time" +%s)
-        local window_end_epoch=$((start_epoch + 432000))  # 5 days in seconds
-        if [ $window_end_epoch -gt $remaining_end_epoch ]; then
-            window_end_epoch=$remaining_end_epoch
-        fi
-        local window_end=$(date -u -d "@$window_end_epoch" +"%Y-%m-%dT%H:%M:%SZ")
+    else
+        # For 7-day window, process one day at a time
+        log "INFO" "Processing 7-day window sequentially"
+        local current_end_time="$end_time"
+        local chunk_size=86400  # 1 day in seconds
         
-        # Wait if we've reached max parallel jobs
-        while [ ${#background_jobs[@]} -ge $max_long_window_jobs ]; do
-            wait -n
-            # Remove completed jobs from array
-            background_jobs=($(jobs -p))
+        # Process 7 days sequentially
+        for i in {1..7}; do
+            # Calculate window times
+            local current_end_epoch=$(date -u -d "$current_end_time" +%s)
+            local window_start_epoch=$((current_end_epoch - chunk_size))
+            local window_start=$(date -u -d "@$window_start_epoch" +"%Y-%m-%dT%H:%M:%SZ")
+            
+            # Make the CloudWatch call
+            make_sample_count_call "$operation" "$window_start" "$current_end_time" "$period" "$output_file" "$table_name"
+            call_counter=$((call_counter + 1))
+            
+            # Update for next iteration
+            current_end_time="$window_start"
         done
-        
-        # Make the CloudWatch call in background
-        make_sample_count_call "$operation" "$remaining_start_time" "$window_end" "$period" "$output_file" "$call_counter" &
-        background_jobs+=($!)
-        call_counter=$((call_counter + 1))
-        
-        # Update for next iteration
-        remaining_start_time="$window_end"
-    done
-    
-    # Wait for all remaining jobs to complete
-    wait
+    fi
     
     echo "    Completed $call_counter sample count calls for $operation"
     return 0
@@ -464,7 +438,7 @@ make_sample_count_call() {
     local end_time="$3"
     local period="$4"
     local output_file="$5"
-    local call_number="$6"
+    local table_name="$6"
     
     # Convert epoch timestamps to ISO format for CloudWatch
     local start_time_iso=$(date -u -d "$start_time" +"%Y-%m-%dT%H:%M:%SZ")
@@ -478,7 +452,7 @@ make_sample_count_call() {
     local end_time_filename=$(echo "$end_time_iso" | sed 's/Z$//' | sed 's/:/_/g' | sed 's/T/_/g')
     
     # Create output filename with safe characters
-    local output_filename="${TABLE_NAME}_${safe_operation}Latency_${start_time_filename}_to_${end_time_filename}.json"
+    local output_filename="${table_name}_${safe_operation}Latency_${start_time_filename}_to_${end_time_filename}.json"
     local output_path="${output_file}/${output_filename}"
     
     # Ensure output directory exists
@@ -493,26 +467,27 @@ make_sample_count_call() {
     log "INFO" "    --end-time \"$end_time_iso\" \\"
     log "INFO" "    --period \"$period\" \\"
     log "INFO" "    --statistics SampleCount \\"
-    log "INFO" "    --dimensions Name=TableName,Value=\"$TABLE_NAME\" \\"
+    log "INFO" "    --dimensions Name=TableName,Value=\"$table_name\" \\"
     log "INFO" "    --region \"$REGION\" \\"
     log "INFO" "    --output json"
     
     # Make the CloudWatch API call
     local cloudwatch_output
-    cloudwatch_output=$(aws cloudwatch get-metric-statistics \
+    touch "$output_path"
+   aws cloudwatch get-metric-statistics \
         --namespace AWS/DynamoDB \
         --metric-name ${operation}Latency \
         --start-time "$start_time_iso" \
         --end-time "$end_time_iso" \
         --period "$period" \
         --statistics SampleCount \
-        --dimensions Name=TableName,Value="$TABLE_NAME" \
+        --dimensions Name=TableName,Value="$table_name" \
         --region "$REGION" \
-        --output json 2>&1)
+        --output json >> $output_path
     
     # Log the response
     log "INFO" "CloudWatch API Response:"
-    log "INFO" "$cloudwatch_output"
+   # log "INFO" "$cloudwatch_output"
     
     # Check for AWS CLI errors
     if [ $? -ne 0 ]; then
@@ -522,7 +497,7 @@ make_sample_count_call() {
     fi
     
     # Save the raw output
-    echo "$cloudwatch_output" > "$output_path"
+ #   echo "$cloudwatch_output" > "$output_path"
     
     # Check if the file was created and has content
     if [ ! -s "$output_path" ]; then
@@ -532,14 +507,28 @@ make_sample_count_call() {
     fi
     
     # Process the output
+    if ! jq -e '.' "$output_path" > /dev/null 2>&1; then
+        log "ERROR" "Invalid JSON in CloudWatch response"
+        rm -f "$output_path"
+        return 1
+    fi
+    
     if ! jq --arg ts "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" '
-        . + {
-            "Timestamp": $ts,
-            "SamplePoints": [.Datapoints[] | {
-                "Timestamp": .Timestamp,
-                "SampleCount": .SampleCount
-            }]
-        }' "$output_path" > "${output_path}.tmp"; then
+        if .Datapoints then
+            . + {
+                "Timestamp": $ts,
+                "SamplePoints": [.Datapoints[] | {
+                    "Timestamp": .Timestamp,
+                    "SampleCount": (.SampleCount // 0)
+                }]
+            }
+        else
+            {
+                "Timestamp": $ts,
+                "SamplePoints": [],
+                "Datapoints": []
+            }
+        end' "$output_path" > "${output_path}.tmp"; then
         log "ERROR" "Failed to process sample count data for $operation"
         rm -f "$output_path" "${output_path}.tmp"
         return 1
@@ -548,7 +537,12 @@ make_sample_count_call() {
     mv "${output_path}.tmp" "$output_path"
     
     # Extract and log sample count
-    local sample_count=$(jq -r '.Datapoints[0].SampleCount // 0' "$output_path")
+    local sample_count
+    if ! sample_count=$(jq -r 'if .Datapoints and (.Datapoints | length) > 0 then .Datapoints[0].SampleCount // 0 else 0 end' "$output_path"); then
+        log "ERROR" "Failed to extract sample count from $output_path"
+        sample_count=0
+    fi
+    
     if [ "$sample_count" = "null" ]; then
         sample_count=0
     fi
@@ -569,75 +563,83 @@ get_p99_latency() {
     local start_time="$4"
     local end_time="$5"
     local output_dir="$6"
+    local period="$7"
+    
+    # Validate inputs
+    if [ -z "$table_name" ]; then
+        log "ERROR" "Table name is empty"
+        return 1
+    fi
+    if [ -z "$period" ]; then
+        log "ERROR" "Period argument is empty for $operation"
+        return 1
+    fi
     
     for arg in "$@"; do
         echo "Argument: $arg"   
     done
     echo "    - Getting P99 latency for $operation from $start_time to $end_time"
+    echo "    - Using period: $period"
+    echo "    - Table name: $table_name"
     
     # Initialize variables
     local call_counter=0
     local background_jobs=()
     local max_parallel_jobs=8  # For 3-hour window
-    local max_long_window_jobs=50  # For longer windows
     
-    # Process 3-hour window first (last 3 hours)
-    echo "    Processing 3-hour window with $max_parallel_jobs parallel jobs"
-    local current_end_time="$end_time"
-    local x=1200  # 20-minute chunks
-    
-    while [ $x -lt 10800 ]; do
-        # Calculate window times
-        local window_start=$(date -u -d "$current_end_time - $x seconds" +"%Y-%m-%dT%H:%M:%SZ")
+    # Check if this is a 3-hour window (period = 1)
+    if [ "$period" = "1" ]; then
+        log "INFO" "Processing 3-hour window with $max_parallel_jobs parallel jobs"
+        local current_end_time="$end_time"
+        local chunk_size=1200  # 20 minutes in seconds
         
-        # Wait if we've reached max parallel jobs
-        while [ ${#background_jobs[@]} -ge $max_parallel_jobs ]; do
-            wait -n
-            # Remove completed jobs from array
-            background_jobs=($(jobs -p))
+        # Process in 8 parallel chunks of 20 minutes each
+        for i in {1..8}; do
+            # Calculate window times
+            local current_end_epoch=$(date -u -d "$current_end_time" +%s)
+            local window_start_epoch=$((current_end_epoch - chunk_size))
+            local window_start=$(date -u -d "@$window_start_epoch" +"%Y-%m-%dT%H:%M:%SZ")
+            
+            # Wait if we've reached max parallel jobs
+            while [ ${#background_jobs[@]} -ge $max_parallel_jobs ]; do
+                wait -n
+                # Remove completed jobs from array
+                background_jobs=($(jobs -p))
+            done
+            
+            # Make the CloudWatch call in background
+            make_p99_call "$table_name" "$region" "$operation" "$window_start" "$current_end_time" "$output_dir" "$period" &
+            background_jobs+=($!)
+            call_counter=$((call_counter + 1))
+            
+            # Update for next iteration
+            current_end_time="$window_start"
         done
         
-        # Make the CloudWatch call in background
-        make_p99_call "$table_name" "$region" "$operation" "$window_start" "$current_end_time" "$output_dir" "$period"
-        background_jobs+=($!)
-        call_counter=$((call_counter + 1))
+        # Wait for all jobs to complete
+        wait
         
-        # Update for next iteration
-        current_end_time="$window_start"
-        x=$((x + 1200))
-    done
-    
-    # Process remaining time window with higher parallelism
-    echo "    Processing remaining time window with $max_long_window_jobs parallel jobs"
-    local remaining_start_time="$start_time"
-    local remaining_end_time=$(date -u -d "$end_time - 3 hours" +"%Y-%m-%dT%H:%M:%SZ")
-    local window_size="5 days"  # 5 days per window
-    
-    while [ "$(date -u -d "$remaining_start_time" +%s)" -lt "$(date -u -d "$remaining_end_time" +%s)" ]; do
-        # Calculate window times
-        local window_end=$(date -u -d "$remaining_start_time + $window_size" +"%Y-%m-%dT%H:%M:%SZ")
-        if [ "$(date -u -d "$window_end" +%s)" -gt "$(date -u -d "$remaining_end_time" +%s)" ]; then
-            window_end="$remaining_end_time"
-        fi
+    else
+        # For 7-day window, process one day at a time
+        log "INFO" "Processing 7-day window sequentially"
+        local current_end_time="$end_time"
+        local chunk_size=86400  # 1 day in seconds
         
-        # Wait if we've reached max parallel jobs
-        while [ ${#background_jobs[@]} -ge $max_long_window_jobs ]; do
-            wait -n
-            # Remove completed jobs from array
-            background_jobs=($(jobs -p))
+        # Process 7 days sequentially
+        for i in {1..7}; do
+            # Calculate window times
+            local current_end_epoch=$(date -u -d "$current_end_time" +%s)
+            local window_start_epoch=$((current_end_epoch - chunk_size))
+            local window_start=$(date -u -d "@$window_start_epoch" +"%Y-%m-%dT%H:%M:%SZ")
+            
+            # Make the CloudWatch call
+            make_p99_call "$table_name" "$region" "$operation" "$window_start" "$current_end_time" "$output_dir" "$period"
+            call_counter=$((call_counter + 1))
+            
+            # Update for next iteration
+            current_end_time="$window_start"
         done
-        
-        # Make the CloudWatch call in background
-        make_p99_call "$table_name" "$region" "$operation" "$remaining_start_time" "$window_end" "$output_dir" "$period" &
-        background_jobs+=($!)
-        call_counter=$((call_counter + 1))
-        
-        # Update for next iteration
-        remaining_start_time="$window_end"
-    done
-    
-    # Wait for all remaining jobs to complete
-    wait
+    fi
     
     echo "    Completed $call_counter P99 latency calls for $table_name $operation"
     return 0
@@ -652,6 +654,16 @@ make_p99_call() {
     local end_time="$5"
     local output_dir="$6"
     local period="$7"
+    
+    # Validate inputs
+    if [ -z "$table_name" ]; then
+        log "ERROR" "Table name is empty"
+        return 1
+    fi
+    if [ -z "$period" ]; then
+        log "ERROR" "Period argument is empty for $operation"
+        return 1
+    fi
     
     # Convert epoch timestamps to ISO format for CloudWatch
     local start_time_iso=$(date -u -d "$start_time" +"%Y-%m-%dT%H:%M:%SZ")
@@ -687,8 +699,8 @@ make_p99_call() {
     
     # Make the CloudWatch API call
     local cloudwatch_output
-    sleep 60
-    cloudwatch_output=$(aws cloudwatch get-metric-statistics \
+    touch "$output_path"
+    aws cloudwatch get-metric-statistics \
         --namespace AWS/DynamoDB \
         --metric-name ${operation}Latency \
         --start-time "$start_time_iso" \
@@ -697,20 +709,21 @@ make_p99_call() {
         --statistics Maximum \
         --dimensions Name=TableName,Value="$table_name" \
         --region "$region" \
-        --output json 2>&1)
+        --output json >> $output_path
     
     # Log the response
-    log "INFO" "CloudWatch API Response:"
+  #  log "INFO" "CloudWatch API Response:"
     log "INFO" "$cloudwatch_output"
     
     # Check for AWS CLI errors
     if [ $? -ne 0 ]; then
         log "ERROR" "Failed to make CloudWatch call for $operation P99: $cloudwatch_output"
+        rm -f "$output_path"
         return 1
     fi
     
     # Save the raw output
-    echo "$cloudwatch_output" > "$output_path"
+#    echo "$cloudwatch_output" > "$output_path"
     
     # Check if the file was created and has content
     if [ ! -s "$output_path" ]; then
@@ -718,31 +731,6 @@ make_p99_call() {
         rm -f "$output_path"
         return 1
     fi
-    
-    # Process the output
-    if ! jq --arg ts "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" '
-        . + {
-            "Timestamp": $ts,
-            "P99Points": [.Datapoints[] | {
-                "Timestamp": .Timestamp,
-                "Maximum": .Maximum
-            }]
-        }' "$output_path" > "${output_path}.tmp"; then
-        log "ERROR" "Failed to process P99 data for $operation"
-        rm -f "$output_path" "${output_path}.tmp"
-        return 1
-    fi
-    
-    mv "${output_path}.tmp" "$output_path"
-    
-    # Extract and log maximum value
-    local max_value
-    max_value=$(jq -r '.Datapoints[0].Maximum // 0' "$output_path")
-    if [ "$max_value" = "null" ]; then
-        max_value=0
-    fi
-    
-    log "INFO" "Maximum P99 for $operation: $max_value"
     
     # Increment CloudWatch calls counter
     increment_cloudwatch_calls 1
@@ -787,12 +775,23 @@ process_table() {
     local end_time=$5
     local period=$6
 
+    # Validate inputs
+    if [ -z "$table" ]; then
+        log "ERROR" "Table name is empty"
+        return 1
+    fi
+    if [ -z "$period" ]; then
+        log "ERROR" "Period argument is empty for table $table, operation $op"
+        return 1
+    fi
+
     log "INFO" "Processing table: $table, operation: $op, time window: $name"
     log "INFO" "Using region: $REGION"
     log "INFO" "Time range: $start_time to $end_time"
+    log "INFO" "Period: $period"
     
     # Get P99 latency
-    local p99_latency=$(get_p99_latency "$table" "$REGION" "$op" "$start_time" "$end_time" "$period")
+    local p99_latency=$(get_p99_latency "$table" "$REGION" "$op" "$start_time" "$end_time" "$OUTPUT_DIR" "$period")
     if [ $? -ne 0 ]; then
         log "ERROR" "Failed to get P99 latency for table $table, operation $op"
         return 1
@@ -843,11 +842,14 @@ process_tables() {
             for name in "${!TIME_WINDOWS[@]}"; do
                 IFS=',' read -r start_time end_time period <<< "${TIME_WINDOWS[$name]}"
                 
-                echo "start_time: $start_time"
-                echo "end_time: $end_time"
-                echo "period: $period"
-                echo "${TIME_WINDOWS[$name]}"
-                sleep 60
+                # Calculate period based on time window
+                if [ "$name" = "Last 3 hours" ]; then
+                    period=8  # 1 second period for 3 hours
+                elif [ "$name" = "Last 7 days" ]; then
+                    period=420  # 1 minute period for 7 days
+                else
+                    period=900  # 5 minute period for longer windows
+                fi
                 
                 # Convert epoch timestamps to UTC format with Z suffix
                 local start_time_utc=$(date -u -d "@$start_time" +"%Y-%m-%dT%H:%M:%SZ")
@@ -864,11 +866,6 @@ process_tables() {
                 fi
                 
                 process_table "$table" "$op" "$name" "$start_time_utc" "$end_time_utc" "$period"
-                sleep 60
-                if [ $? -ne 0 ]; then
-                    log "ERROR" "Failed to process table $table, operation $op, time window $name"
-                    continue
-                fi
             done
         done
         
@@ -901,9 +898,20 @@ get_dynamodb_metrics() {
         return 1
     fi
     
-    local creation_date=$(echo "$table_info" | jq -r '.Table.CreationDateTime')
-    if [ "$creation_date" = "null" ]; then
+    # Validate JSON response
+    if ! echo "$table_info" | jq -e '.' > /dev/null 2>&1; then
+        log "ERROR" "Invalid JSON in table description response"
+        return 1
+    fi
+    
+    local creation_date
+    if ! creation_date=$(echo "$table_info" | jq -r '.Table.CreationDateTime // empty'); then
         log "ERROR" "Failed to extract creation date from table info"
+        return 1
+    fi
+    
+    if [ -z "$creation_date" ]; then
+        log "ERROR" "Creation date is empty in table info"
         return 1
     fi
     
@@ -955,7 +963,7 @@ get_dynamodb_metrics() {
         # Calculate start time (1 month ago) in UTC with Z suffix
         local start_time=$(date -u -d "1 month ago" +"%Y-%m-%dT%H:%M:%SZ")
         
-        get_p99_latency "$TABLE_NAME" "$REGION" "$op" "$start_time" "$end_time" "$table_output_dir"
+        get_p99_latency "$TABLE_NAME" "$REGION" "$op" "$start_time" "$end_time" "$table_output_dir" "$period"
         local_cloudwatch_calls=$((local_cloudwatch_calls + $?))
         
         # Find the maximum P99 value from all time windows
@@ -965,11 +973,9 @@ get_dynamodb_metrics() {
         for file in "$table_output_dir/${TABLE_NAME}_${op}P99Latency_"*.json; do
             if [ -f "$file" ]; then
                 found_files=true
-                local file_max
-                file_max=$(jq -r '.Datapoints[].Maximum // 0' "$file" | sort -n | tail -n1)
-                if [ "$file_max" != "null" ] && [ "$file_max" -gt "$max_p99" ]; then
-                    max_p99=$file_max
-                fi
+                # Move files from temp to output directory
+                local filename=$(basename "$file")
+                mv "$file" "$OUTPUT_DIR/$filename"
             fi
         done
         
@@ -980,23 +986,6 @@ get_dynamodb_metrics() {
         
         OPERATION_P99_LATENCIES[$op]=$max_p99
         log "INFO" "Maximum P99 latency for $op: $max_p99"
-        
-        # Update detailed file with P99 latency data
-        if ! jq --arg op "$op" --arg p99 "$max_p99" '
-            .Metrics.ReadOperations[$op].P99Latency = $p99 |
-            .Metrics.ReadOperations[$op].P99Data = {
-                "MaximumP99": $p99,
-                "TimeWindows": [inputs | {
-                    "StartTime": .Datapoints[0].Timestamp,
-                    "EndTime": .Datapoints[-1].Timestamp,
-                    "Points": .P99Points
-                }]
-            }' "$detailed_file" "$table_output_dir/${TABLE_NAME}_${op}P99Latency_"*.json > "${detailed_file}.tmp"; then
-            log "ERROR" "Failed to update detailed file with P99 data for $op"
-            continue
-        fi
-        
-        mv "${detailed_file}.tmp" "$detailed_file"
     done
     
     log "INFO" "Step 6: Processing time windows"
@@ -1059,7 +1048,7 @@ get_dynamodb_metrics() {
                 log "INFO" "Window: $window_start to $window_end"
                 
                 # Make the CloudWatch call
-                make_cloudwatch_call "$op" "$window_start" "$window_end" "$period" "$temp_dir/output" "$call_counter"
+                make_cloudwatch_call "$op" "$window_start" "$window_end" "$period" "$temp_dir/output" "$table_name"
                 call_counter=$((call_counter + 1))
                 
                 # Show progress
