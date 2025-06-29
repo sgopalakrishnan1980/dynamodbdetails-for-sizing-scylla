@@ -13,11 +13,15 @@ REGIONS_TO_PROBE=()  # Array to store regions to probe
 TABLE_NAME=""  # Initialize TABLE_NAME as empty
 TABLE_NAMES=() #inititalize arrays
 USE_INSTANCE_PROFILE=false
+TOTAL_AWS_CALLS=0  # Global counter for all AWS calls made during script execution
 # Create log directory if it doesn't exist
 mkdir -p "$LOG_DIR"
 
 # Initialize log file
 LOG_FILE="${LOG_DIR}/script_execution_$(date +%Y%m%d_%H%M%S).log"
+
+# Log initial counter value
+log_message "Initial AWS call counter: $TOTAL_AWS_CALLS" "DEBUG"
 
 # Arrays for operation types
 READ_OPERATIONS=("GetItem" "Query" "Scan")
@@ -223,7 +227,8 @@ get_sample_counts() {
     local start_time=$2
     local current_time=$3
     local iteration=$4
-    log_function_call "get_sample_counts" "$table_name" "$start_time" "$current_time" "$iteration"
+    local period=${5:-$PERIOD}  # Use provided period or default to global PERIOD
+    log_function_call "get_sample_counts" "$table_name" "$start_time" "$current_time" "$iteration" "$period"
     
     # Validate input parameter
     if [ -z "$table_name" ]; then
@@ -262,7 +267,7 @@ get_sample_counts() {
         log_message "Created metrics log file: $log_file" "INFO"
         
         # Construct the AWS CLI command
-        local aws_cmd="aws cloudwatch get-metric-statistics $profile_arg --namespace AWS/DynamoDB --metric-name ${op}Latency --start-time \"$start_time\" --end-time \"$current_time\" --period $PERIOD --statistics SampleCount --dimensions Name=TableName,Value=\"$table_name\" Name=Operation,Value=\"$op\" --output text"
+        local aws_cmd="aws cloudwatch get-metric-statistics $profile_arg --namespace AWS/DynamoDB --metric-name ${op}Latency --start-time \"$start_time\" --end-time \"$current_time\" --period $period --statistics SampleCount --dimensions Name=TableName,Value=\"$table_name\" Name=Operation,Value=\"$op\" --output text"
         
         # Log the AWS CLI command
         log_message "Executing CloudWatch API call:" "INFO"
@@ -271,13 +276,16 @@ get_sample_counts() {
         echo "$aws_cmd" | tee -a "$LOG_FILE"
         
         # Get metrics and append to log file in background
+        # Increment global AWS call counter before starting background process
+        TOTAL_AWS_CALLS=$((TOTAL_AWS_CALLS + 1))
+        log_message "AWS call counter incremented to: $TOTAL_AWS_CALLS" "DEBUG"
         (
             aws cloudwatch get-metric-statistics $profile_arg \
                 --namespace AWS/DynamoDB \
                 --metric-name ${op}Latency \
                 --start-time "$start_time" \
                 --end-time "$current_time" \
-                --period $PERIOD \
+                --period $period \
                 --statistics SampleCount \
                 --dimensions Name=TableName,Value="$table_name" Name=Operation,Value="$op" \
                 --output text > "$log_file"
@@ -306,7 +314,7 @@ get_sample_counts() {
         log_message "Created metrics log file: $log_file" "INFO"
         
         # Construct the AWS CLI command
-        local aws_cmd="aws cloudwatch get-metric-statistics $profile_arg --namespace AWS/DynamoDB --metric-name SuccessfulRequestLatency --start-time \"$start_time\" --end-time \"$current_time\" --period $PERIOD --statistics SampleCount --dimensions Name=TableName,Value=\"$table_name\" Name=Operation,Value=\"$op\" --output text"
+        local aws_cmd="aws cloudwatch get-metric-statistics $profile_arg --namespace AWS/DynamoDB --metric-name SuccessfulRequestLatency --start-time \"$start_time\" --end-time \"$current_time\" --period $period --statistics SampleCount --dimensions Name=TableName,Value=\"$table_name\" Name=Operation,Value=\"$op\" --output text"
         
         # Log the AWS CLI command
         log_message "Executing CloudWatch API call:" "INFO"
@@ -315,13 +323,16 @@ get_sample_counts() {
         echo "$aws_cmd" | tee -a "$LOG_FILE"
         
         # Get metrics and append to log file in background
+        # Increment global AWS call counter before starting background process
+        TOTAL_AWS_CALLS=$((TOTAL_AWS_CALLS + 1))
+        log_message "AWS call counter incremented to: $TOTAL_AWS_CALLS" "DEBUG"
         (
             aws cloudwatch get-metric-statistics $profile_arg \
                 --namespace AWS/DynamoDB \
                 --metric-name SuccessfulRequestLatency \
                 --start-time "$start_time" \
                 --end-time "$current_time" \
-                --period $PERIOD \
+                --period $period \
                 --statistics SampleCount \
                 --dimensions Name=TableName,Value="$table_name" Name=Operation,Value="$op"  \
                 --output text > "$log_file"
@@ -341,7 +352,8 @@ get_p99_latency() {
     local start_time=$2
     local current_time=$3
     local iteration=$4
-    log_function_call "get_p99_latency" "$table_name" "$start_time" "$current_time" "$iteration"
+    local period=${5:-$PERIOD}  # Use provided period or default to global PERIOD
+    log_function_call "get_p99_latency" "$table_name" "$start_time" "$current_time" "$iteration" "$period"
     
     # Validate input parameter
     if [ -z "$table_name" ]; then
@@ -379,7 +391,7 @@ get_p99_latency() {
         local log_file="${metric_dir}/p99_${op}_${start_time_filename}to${end_time_filename}.log"
         
         # Construct the AWS CLI command
-        local aws_cmd="aws cloudwatch get-metric-statistics $profile_arg --namespace AWS/DynamoDB --metric-name SuccessfulRequestLatency --start-time \"$start_time\" --end-time \"$current_time\" --period $PERIOD --extended-statistics p99 --dimensions Name=TableName,Value=\"$table_name\" Name=Operation,Value=\"$op\" --output text"
+        local aws_cmd="aws cloudwatch get-metric-statistics $profile_arg --namespace AWS/DynamoDB --metric-name SuccessfulRequestLatency --start-time \"$start_time\" --end-time \"$current_time\" --period $period --extended-statistics p99 --dimensions Name=TableName,Value=\"$table_name\" Name=Operation,Value=\"$op\" --output text"
         
         # Log the AWS CLI command
         log_message "Executing CloudWatch API call:" "INFO"
@@ -388,13 +400,16 @@ get_p99_latency() {
         echo "$aws_cmd" | tee -a "$LOG_FILE"
         
         # Get P99 metrics and write to log file in background
+        # Increment global AWS call counter before starting background process
+        TOTAL_AWS_CALLS=$((TOTAL_AWS_CALLS + 1))
+        log_message "AWS call counter incremented to: $TOTAL_AWS_CALLS" "DEBUG"
         (
             aws cloudwatch get-metric-statistics $profile_arg \
                 --namespace AWS/DynamoDB \
                 --metric-name SuccessfulRequestLatency \
                 --start-time "$start_time" \
                 --end-time "$current_time" \
-                --period $PERIOD \
+                --period $period \
                 --extended-statistics p99 \
                 --dimensions Name=TableName,Value="$table_name" Name=Operation,Value="$op" \
                 --output text > "$log_file"
@@ -422,7 +437,7 @@ get_p99_latency() {
         local log_file="${metric_dir}/${start_time_filename}to${end_time_filename}.log"
         
         # Construct the AWS CLI command
-        local aws_cmd="aws cloudwatch get-metric-statistics $profile_arg --namespace AWS/DynamoDB --metric-name ${op}Latency --start-time \"$start_time\" --end-time \"$current_time\" --period $PERIOD --extended-statistics p99 --dimensions Name=TableName,Value=\"$table_name\" Name=Operation,Value=\"$op\" --output text"
+        local aws_cmd="aws cloudwatch get-metric-statistics $profile_arg --namespace AWS/DynamoDB --metric-name ${op}Latency --start-time \"$start_time\" --end-time \"$current_time\" --period $period --extended-statistics p99 --dimensions Name=TableName,Value=\"$table_name\" Name=Operation,Value=\"$op\" --output text"
         
         # Log the AWS CLI command
         log_message "Executing CloudWatch API call:" "INFO"
@@ -431,13 +446,16 @@ get_p99_latency() {
         echo "$aws_cmd" | tee -a "$LOG_FILE"
         
         # Get P99 metrics and write to log file in background
+        # Increment global AWS call counter before starting background process
+        TOTAL_AWS_CALLS=$((TOTAL_AWS_CALLS + 1))
+        log_message "AWS call counter incremented to: $TOTAL_AWS_CALLS" "DEBUG"
         (
             aws cloudwatch get-metric-statistics $profile_arg \
                 --namespace AWS/DynamoDB \
                 --metric-name ${op}Latency \
                 --start-time "$start_time" \
                 --end-time "$current_time" \
-                --period $PERIOD \
+                --period $period \
                 --extended-statistics p99 \
                 --dimensions Name=TableName,Value="$table_name" Name=Operation,Value="$op" \
                 --output text > "$log_file"
@@ -463,96 +481,111 @@ validate_variables() {
 
 # Function to consolidate log files by table, API, and metric name
 consolidate_table_logs() {
-    local table_name=$1
-    local region=$2
+    local period_type=$1  # "3hr" or "7day"
     
-    log_message "Starting log consolidation for table: $table_name in region $region" "INFO"
+    log_message "Starting log consolidation for $period_type period..." "INFO"
     
-    # Create table directory path
-    local table_dir="${LOG_DIR}/${table_name}"
-    
-    if [ ! -d "$table_dir" ]; then
-        log_message "Table directory not found: $table_dir" "WARN"
-        return 1
-    fi
-    
-    # Process each operation type (GetItem, Query, Scan, PutItem, etc.)
-    for op in "${READ_OPERATIONS[@]}" "${WRITE_OPERATIONS[@]}"; do
-        local op_dir="${table_dir}/${op}"
-        
-        if [ ! -d "$op_dir" ]; then
-            log_message "Operation directory not found: $op_dir" "DEBUG"
+    # Process each table directory
+    for table_dir in "${LOG_DIR}"/*/; do
+        if [ ! -d "$table_dir" ]; then
             continue
         fi
         
-        # Process sample_count metrics
-        local sample_count_dir="${op_dir}/sample_count"
-        if [ -d "$sample_count_dir" ]; then
-            local consolidated_sample_count="${table_dir}/${table_name}_${op}_sample_count-3hrs.log"
-            
-            # Add header to consolidated file
-            {
-                echo "================================================"
-                echo "TABLE: $table_name"
-                echo "REGION: $region"
-                echo "OPERATION: $op"
-                echo "METRIC: SampleCount"
-                echo "PERIOD: 3 hours (20-minute intervals)"
-                echo "GENERATED: $(date)"
-                echo "================================================"
-                echo ""
-            } > "$consolidated_sample_count"
-            
-            # Concatenate all sample count log files for this operation
-            if find "$sample_count_dir" -name "*.log" -type f | grep -q .; then
-                find "$sample_count_dir" -name "*.log" -type f | sort | while read -r log_file; do
-                    echo "--- $(basename "$log_file") ---" >> "$consolidated_sample_count"
-                    cat "$log_file" >> "$consolidated_sample_count"
-                    echo "" >> "$consolidated_sample_count"
-                done
-                log_message "Created consolidated sample count log: $consolidated_sample_count" "INFO"
-            else
-                log_message "No sample count log files found for $op operation" "DEBUG"
-            fi
-        fi
+        local table_name=$(basename "$table_dir")
+        log_message "Processing table: $table_name" "INFO"
         
-        # Process p99_latency metrics
-        local p99_latency_dir="${op_dir}/p99_latency"
-        if [ -d "$p99_latency_dir" ]; then
-            local consolidated_p99_latency="${table_dir}/${table_name}_${op}_p99_latency-3hrs.log"
+        # Process each operation type (GetItem, Query, Scan, PutItem, etc.)
+        for op in "${READ_OPERATIONS[@]}" "${WRITE_OPERATIONS[@]}"; do
+            local op_dir="${table_dir}/${op}"
             
-            # Add header to consolidated file
-            {
-                echo "================================================"
-                echo "TABLE: $table_name"
-                echo "REGION: $region"
-                echo "OPERATION: $op"
-                echo "METRIC: P99 Latency"
-                echo "PERIOD: 3 hours (20-minute intervals)"
-                echo "GENERATED: $(date)"
-                echo "================================================"
-                echo ""
-            } > "$consolidated_p99_latency"
-            
-            # Concatenate all P99 latency log files for this operation
-            if find "$p99_latency_dir" -name "*.log" -type f | grep -q .; then
-                find "$p99_latency_dir" -name "*.log" -type f | sort | while read -r log_file; do
-                    echo "--- $(basename "$log_file") ---" >> "$consolidated_p99_latency"
-                    cat "$log_file" >> "$consolidated_p99_latency"
-                    echo "" >> "$consolidated_p99_latency"
-                done
-                log_message "Created consolidated P99 latency log: $consolidated_p99_latency" "INFO"
-            else
-                log_message "No P99 latency log files found for $op operation" "DEBUG"
+            if [ ! -d "$op_dir" ]; then
+                log_message "Operation directory not found: $op_dir" "DEBUG"
+                continue
             fi
-        fi
+            
+            # Process sample_count metrics
+            local sample_count_dir="${op_dir}/sample_count"
+            if [ -d "$sample_count_dir" ]; then
+                local consolidated_sample_count="${table_dir}/${table_name}_${op}_sample_count-${period_type}.log"
+                
+                # Add header to consolidated file
+                {
+                    echo "================================================"
+                    echo "TABLE: $table_name"
+                    echo "OPERATION: $op"
+                    echo "METRIC: SampleCount"
+                    if [ "$period_type" = "3hr" ]; then
+                        echo "PERIOD: 3 hours (20-minute intervals)"
+                    else
+                        echo "PERIOD: 7 days (24-hour intervals)"
+                    fi
+                    echo "GENERATED: $(date)"
+                    echo "================================================"
+                    echo ""
+                } > "$consolidated_sample_count"
+                
+                # Concatenate all sample count log files for this operation
+                if find "$sample_count_dir" -name "*.log" -type f | grep -q .; then
+                    find "$sample_count_dir" -name "*.log" -type f | sort | while read -r log_file; do
+                        echo "--- $(basename "$log_file") ---" >> "$consolidated_sample_count"
+                        cat "$log_file" >> "$consolidated_sample_count"
+                        echo "" >> "$consolidated_sample_count"
+                    done
+                    log_message "Created consolidated sample count log: $consolidated_sample_count" "INFO"
+                    
+                    # Delete raw files after consolidation
+                    # find "$sample_count_dir" -name "*.log" -type f -delete
+                    # log_message "Deleted raw sample count files for $op operation" "INFO"
+                else
+                    log_message "No sample count log files found for $op operation" "DEBUG"
+                fi
+            fi
+            
+            # Process p99_latency metrics
+            local p99_latency_dir="${op_dir}/p99_latency"
+            if [ -d "$p99_latency_dir" ]; then
+                local consolidated_p99_latency="${table_dir}/${table_name}_${op}_p99_latency-${period_type}.log"
+                
+                # Add header to consolidated file
+                {
+                    echo "================================================"
+                    echo "TABLE: $table_name"
+                    echo "OPERATION: $op"
+                    echo "METRIC: P99 Latency"
+                    if [ "$period_type" = "3hr" ]; then
+                        echo "PERIOD: 3 hours (20-minute intervals)"
+                    else
+                        echo "PERIOD: 7 days (24-hour intervals)"
+                    fi
+                    echo "GENERATED: $(date)"
+                    echo "================================================"
+                    echo ""
+                } > "$consolidated_p99_latency"
+                
+                # Concatenate all P99 latency log files for this operation
+                if find "$p99_latency_dir" -name "*.log" -type f | grep -q .; then
+                    find "$p99_latency_dir" -name "*.log" -type f | sort | while read -r log_file; do
+                        echo "--- $(basename "$log_file") ---" >> "$consolidated_p99_latency"
+                        cat "$log_file" >> "$consolidated_p99_latency"
+                        echo "" >> "$consolidated_p99_latency"
+                    done
+                    log_message "Created consolidated P99 latency log: $consolidated_p99_latency" "INFO"
+                    
+                    # Delete raw files after consolidation
+                    # find "$p99_latency_dir" -name "*.log" -type f -delete
+                    # log_message "Deleted raw P99 latency files for $op operation" "INFO"
+                else
+                    log_message "No P99 latency log files found for $op operation" "DEBUG"
+                fi
+            fi
+        done
     done
     
-    log_message "Log consolidation completed for table: $table_name" "INFO"
+    log_message "Log consolidation completed for $period_type period" "INFO"
     echo "================================================"
-    echo "Log consolidation completed for table: $table_name"
-    echo "Region: $region"
-    echo "Consolidated files created in: $table_dir"
+    echo "Log consolidation completed for $period_type period"
+    echo "Consolidated files created in: $LOG_DIR"
+    echo "Raw files preserved for reference"
     echo "================================================"
 }
 
@@ -643,7 +676,6 @@ main() {
     # Initialize iteration counter and AWS call counter
     local iteration=1
     local max_iterations=9
-    local aws_call_counter=0
     local max_calls_before_pause=100
     
     # Initialize time variables for the first iteration
@@ -678,27 +710,16 @@ main() {
             
             # Get sample counts
             log_message "Collecting sample counts for iteration $iteration..." "INFO"
-            if ! get_sample_counts "$TABLE_NAME" "$start_time" "$current_time" "$iteration"; then
+            if ! get_sample_counts "$TABLE_NAME" "$start_time" "$current_time" "$iteration" "1"; then
                 log_message "Error: Failed to collect sample counts for iteration $iteration" "ERROR"
                 continue
             fi
             
             # Get P99 latency
             log_message "Collecting P99 latency metrics for iteration $iteration..." "INFO"
-            if ! get_p99_latency "$TABLE_NAME" "$start_time" "$current_time" "$iteration"; then
+            if ! get_p99_latency "$TABLE_NAME" "$start_time" "$current_time" "$iteration" "1"; then
                 log_message "Error: Failed to collect P99 latency metrics for iteration $iteration" "ERROR"
                 continue
-            fi
-            
-            # Increment AWS call counter (each operation makes one call)
-            aws_call_counter=$((aws_call_counter + ${#READ_OPERATIONS[@]} + ${#WRITE_OPERATIONS[@]}))
-            
-            # Check if we need to wait for background processes
-            if [ $aws_call_counter -ge $max_calls_before_pause ]; then
-                log_message "Reached $aws_call_counter AWS calls. Waiting for all background processes to complete..." "INFO"
-                wait
-                log_message "All background processes completed. Resetting counter." "INFO"
-                aws_call_counter=0
             fi
             
             log_message "Completed iteration $iteration of $max_iterations for table $TABLE_NAME" "INFO"
@@ -709,7 +730,7 @@ main() {
             echo "Start: $start_time"
             echo "End:   $current_time"
             echo "Period: 1 second"
-            echo "AWS calls made in this session: $aws_call_counter"
+            echo "Total AWS calls made: $TOTAL_AWS_CALLS"
             echo "================================================"
             
             # Update times for next iteration
@@ -724,10 +745,91 @@ main() {
         iteration=1
         current_time=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
         start_time=$(date -u -d "20 minutes ago" +"%Y-%m-%dT%H:%M:%SZ")
-        
-        # Consolidate log files for this table
-        consolidate_table_logs "$table_name" "$region"
     done
+    
+    # Consolidate all 3-hour collection log files
+    log_message "Starting consolidation of 3-hour collection data..." "INFO"
+    consolidate_table_logs "3hr"
+    
+    # Continue with 7-day metrics collection (60-second period)
+    log_message "Starting DynamoDB metrics collection for last 7 days in 24-hour intervals..." "INFO"
+    
+    # Initialize iteration counter and AWS call counter for 7-day collection
+    local iteration_7d=1
+    local max_iterations_7d=7
+    
+    # Initialize time variables for the first iteration (7 days)
+    local current_time_7d=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+    local start_time_7d=$(date -u -d "24 hours ago" +"%Y-%m-%dT%H:%M:%SZ")
+    
+    # Process each table for 7-day collection
+    for table_info in "${tables_with_regions[@]}"; do
+        # Split table name and region
+        IFS=':' read -r table_name region <<< "$table_info"
+        
+        # Skip if table name is empty
+        if [ -z "$table_name" ]; then
+            log_message "Skipping empty table name" "WARN"
+            continue
+        fi
+        
+        # Set the current table name
+        TABLE_NAME="$table_name"
+        
+        log_message "Starting 7-day processing for table: $TABLE_NAME in region $region" "INFO"
+        
+        # Set AWS region for this table
+        export AWS_DEFAULT_REGION="$region"
+        
+        while [ $iteration_7d -le $max_iterations_7d ]; do
+            log_message "Starting 7-day iteration $iteration_7d of $max_iterations_7d for table $TABLE_NAME" "INFO"
+            log_message "Time range: $start_time_7d to $current_time_7d" "INFO"
+            
+            # Validate environment and variables
+            validate_variables
+            
+            # Get sample counts
+            log_message "Collecting sample counts for 7-day iteration $iteration_7d..." "INFO"
+            if ! get_sample_counts "$TABLE_NAME" "$start_time_7d" "$current_time_7d" "$iteration_7d" "60"; then
+                log_message "Error: Failed to collect sample counts for 7-day iteration $iteration_7d" "ERROR"
+                continue
+            fi
+            
+            # Get P99 latency
+            log_message "Collecting P99 latency metrics for 7-day iteration $iteration_7d..." "INFO"
+            if ! get_p99_latency "$TABLE_NAME" "$start_time_7d" "$current_time_7d" "$iteration_7d" "60"; then
+                log_message "Error: Failed to collect P99 latency metrics for 7-day iteration $iteration_7d" "ERROR"
+                continue
+            fi
+            
+            log_message "Completed 7-day iteration $iteration_7d of $max_iterations_7d for table $TABLE_NAME" "INFO"
+            echo "================================================"
+            echo "7-Day Statistics collected for table: $TABLE_NAME"
+            echo "Region: $region"
+            echo "Time range:"
+            echo "Start: $start_time_7d"
+            echo "End:   $current_time_7d"
+            echo "Period: 60 seconds"
+            echo "Total AWS calls made: $TOTAL_AWS_CALLS"
+            echo "================================================"
+            
+            # Update times for next iteration
+            current_time_7d=$start_time_7d
+            start_time_7d=$(date -u -d "$start_time_7d - 24 hours" +"%Y-%m-%dT%H:%M:%SZ")
+            
+            # Increment iteration counter
+            iteration_7d=$((iteration_7d + 1))
+        done
+        
+        # Reset iteration counter for next table
+        iteration_7d=1
+        current_time_7d=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+        start_time_7d=$(date -u -d "24 hours ago" +"%Y-%m-%dT%H:%M:%SZ")
+    done
+    
+    # Consolidate all 7-day collection log files
+    log_message "Starting consolidation of 7-day collection data..." "INFO"
+    consolidate_table_logs "7day"
     
     # Final wait to ensure all background processes are complete
     wait
@@ -735,9 +837,11 @@ main() {
     log_message "Metrics collection completed successfully for all tables" "INFO"
     echo "================================================"
     echo "Completed collection of statistics for all tables"
-    echo "Total iterations per table: $max_iterations"
-    echo "Time period: 1 second"
-    echo "Total AWS calls made: $aws_call_counter"
+    echo ""
+    echo "Collection Summary:"
+    echo "  - 3-Hour Collection: $max_iterations iterations per table (1-second period)"
+    echo "  - 7-Day Collection: $max_iterations_7d iterations per table (60-second period)"
+    echo "  - Total AWS API calls made: $TOTAL_AWS_CALLS"
     echo "================================================"
 }
 
