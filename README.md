@@ -21,11 +21,109 @@ This repository contains scripts designed to help with DynamoDB analysis and met
 
 ## Installation
 
+### Option 1: Direct Installation
 1. Clone the repository
 2. Make the scripts executable:
 ```bash
 chmod +x *.sh
 ```
+
+### Option 2: Docker Container (Work in Progress)
+A Docker container is available for running the scripts in an isolated environment.
+
+#### Building the Container
+
+**Using Docker:**
+```bash
+docker build -t dynamodb-metrics-collector .
+```
+
+**Using Podman:**
+```bash
+podman build -t dynamodb-metrics-collector .
+```
+
+#### Running the Container
+
+**Using Docker:**
+```bash
+docker run -it --rm dynamodb-metrics-collector
+```
+
+**Using Podman:**
+```bash
+podman run -it --rm dynamodb-metrics-collector
+```
+
+#### AWS Configuration in Container
+
+Once inside the container, you'll need to configure AWS credentials. Choose one of the following methods:
+
+**Method 1: AWS Configure (Interactive)**
+```bash
+aws configure
+# Enter your AWS Access Key ID
+# Enter your AWS Secret Access Key
+# Enter your default region (e.g., us-east-1)
+# Enter your default output format (json)
+```
+
+**Method 2: Environment Variables**
+```bash
+export AWS_ACCESS_KEY_ID="your_access_key_id"
+export AWS_SECRET_ACCESS_KEY="your_secret_access_key"
+export AWS_SESSION_TOKEN="your_session_token"  # If using temporary credentials
+export AWS_DEFAULT_REGION="us-east-1"
+```
+
+**Method 3: AWS Profile**
+```bash
+aws configure --profile myprofile
+# Then use: aws configure list-profiles
+# And set: export AWS_PROFILE="myprofile"
+```
+
+#### Running Scripts in Container
+
+After configuring AWS credentials, you can run the scripts normally:
+```bash
+# Process all tables in current region
+./dynamo_metrics_collection.sh
+
+# Process specific table with custom profile
+./dynamo_metrics_collection.sh -t mytable -p myprofile
+
+# Process tables in specific regions
+./dynamo_metrics_collection.sh -r us-east-1,us-west-2
+```
+
+#### Container with Volume Mount (Recommended)
+
+To persist logs and data outside the container:
+
+**Using Docker:**
+```bash
+docker run -it --rm \
+  -v $(pwd)/logs:/app/dynamodbdetails/logs \
+  -e AWS_ACCESS_KEY_ID="your_access_key_id" \
+  -e AWS_SECRET_ACCESS_KEY="your_secret_access_key" \
+  -e AWS_SESSION_TOKEN="your_session_token" \
+  -e AWS_DEFAULT_REGION="us-east-1" \
+  dynamodb-metrics-collector
+```
+
+**Using Podman:**
+```bash
+podman run -it --rm \
+  -v $(pwd)/logs:/app/dynamodbdetails/logs \
+  -e AWS_ACCESS_KEY_ID="your_access_key_id" \
+  -e AWS_SECRET_ACCESS_KEY="your_secret_access_key" \
+  -e AWS_SESSION_TOKEN="your_session_token" \
+  -e AWS_DEFAULT_REGION="us-east-1" \
+  dynamodb-metrics-collector
+```
+
+**Note:** The Docker support is currently a work in progress. Some features may not work as expected, and the container setup may require adjustments based on your specific environment and requirements.
 
 ## Script Categories
 
