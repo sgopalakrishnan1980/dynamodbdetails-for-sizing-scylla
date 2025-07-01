@@ -1,0 +1,76 @@
+Instance Profile Authentication Flow (-I switch)
+================================================
+
+Script Start
+    |
+    v
+[Parse Command Line Args]
+    |
+    v
+[-I flag present?] -----> NO -----> [Use AWS Profile/Credentials]
+    |                              |
+    YES                           |
+    |                             |
+    v                             |
+[USE_INSTANCE_PROFILE = true]     |
+    |                             |
+    v                             |
+[Get EC2 Metadata Token]          |
+    |                             |
+    v                             |
+[Token Retrieved?]                |
+    |                             |
+    NO                            |
+    |                             |
+    v                             |
+[Error: Not running on EC2]       |
+    |                             |
+    YES                           |
+    |                             |
+    v                             |
+[Get Instance Profile Name]       |
+    |                             |
+    v                             |
+[Profile Name Retrieved?]         |
+    |                             |
+    NO                            |
+    |                             |
+    v                             |
+[Error: No profile attached]      |
+    |                             |
+    YES                           |
+    |                             |
+    v                             |
+[Test AWS STS get-caller-identity] |
+    |                             |
+    v                             |
+[Identity Retrieved?]             |
+    |                             |
+    NO                            |
+    |                             |
+    v                             |
+[Error: Profile not authorized]   |
+    |                             |
+    YES                           |
+    |                             |
+    v                             |
+[Log Account ID & ARN]            |
+    |                             |
+    v                             |
+[Continue with AWS Operations] <--+
+    |
+    v
+[All AWS calls use instance profile]
+    |
+    v
+[No --profile args needed]
+    |
+    v
+[Script completes]
+
+Key Points:
+- Only works when running on EC2 instances
+- Requires IAM role attached to instance
+- Automatically handles credential rotation
+- No need to manage access keys
+- More secure than stored credentials 

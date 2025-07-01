@@ -10,8 +10,7 @@ LOG_DIR="dynamo_metrics_logs_$(date +%m%d%y%H%M%S)"
 AWS_PROFILE=""
 PERIOD=1  # Default period for CloudWatch metrics in seconds
 REGIONS_TO_PROBE=()  # Array to store regions to probe
-TABLE_NAME=""  # Initialize TABLE_NAME as empty
-TABLE_NAMES=() #inititalize arrays
+TABLE_NAMES=()  # Array to store table names to process
 USE_INSTANCE_PROFILE=false
 TOTAL_AWS_CALLS=0  # Global counter for all AWS calls made during script execution
 # Create log directory if it doesn't exist
@@ -19,6 +18,15 @@ mkdir -p "$LOG_DIR"
 
 # Initialize log file
 LOG_FILE="${LOG_DIR}/script_execution_$(date +%Y%m%d_%H%M%S).log"
+
+# Function to log messages with timestamp
+log_message() {
+    local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
+    local message="$1"
+    local level="${2:-INFO}"  # Default to INFO if level not specified
+    
+    echo "[$timestamp] [$level] $message" | tee -a "$LOG_FILE"
+}
 
 # Log initial counter value
 log_message "Initial AWS call counter: $TOTAL_AWS_CALLS" "DEBUG"
@@ -33,15 +41,6 @@ START_TIME=$(date -u -d "20 minutes ago" +"%Y-%m-%dT%H:%M:%SZ")
 START_TIME_FILENAME=$(echo "$START_TIME" | sed 's/:/_/g' | sed 's/T/_/g')
 END_TIME_FILENAME=$(echo "$CURRENT_TIME" | sed 's/:/_/g' | sed 's/T/_/g')
 default_region=$(aws configure get region $profile_arg 2>&1)
-
-# Function to log messages with timestamp
-log_message() {
-    local timestamp=$(date '+%Y-%m-%d %H:%M:%S')
-    local message="$1"
-    local level="${2:-INFO}"  # Default to INFO if level not specified
-    
-    echo "[$timestamp] [$level] $message" | tee -a "$LOG_FILE"
-}
 
 # Function to get default region
 get_default_region() {
@@ -87,25 +86,27 @@ get_default_region() {
 
 # Function to show usage information
 show_usage() {
-    echo "Usage: $0 [-t <table_name>] [-p <aws_profile>] [-r <regions>] [-I]"
+    echo "Usage: $0 [-t <table_names>] [-p <aws_profile>] [-r <regions>] [-I]"
     echo "Options:"
-    echo "  -t <table_name>  Optional: Specific table to process. If not provided, all tables will be processed."
+    echo "  -t <table_names> Optional: Comma-separated list of specific tables to process. If not provided, all tables will be processed."
     echo "  -p <aws_profile> Optional: AWS profile to use"
     echo "  -r <regions>     Optional: Comma-separated list of regions to process. If not provided, uses current region."
     echo "  -I               Optional: Use EC2 Instance Profile for authentication"
     echo ""
     echo "Examples:"
-    echo "  $0                    # Process all tables in current region"
-    echo "  $0 -t mytable         # Process only 'mytable' in current region"
-    echo "  $0 -r us-east-1       # Process all tables in us-east-1"
-    echo "  $0 -t mytable -r us-east-1,us-west-2  # Process 'mytable' in specified regions"
+    echo "  $0                                    # Process all tables in current region"
+    echo "  $0 -t mytable                         # Process only 'mytable' in current region"
+    echo "  $0 -t table1,table2,table3           # Process only 'table1', 'table2', and 'table3' in current region"
+    echo "  $0 -r us-east-1                      # Process all tables in us-east-1"
+    echo "  $0 -t mytable -r us-east-1,us-west-2 # Process 'mytable' in specified regions"
+    echo "  $0 -t table1,table2 -r us-east-1     # Process 'table1' and 'table2' in us-east-1"
     exit 1
 }
 
 # Parse command line arguments
 while getopts "t:p:r:I" opt; do
     case $opt in
-        t) TABLE_NAME="$OPTARG";;
+        t) IFS=',' read -ra TABLE_NAMES <<< "$OPTARG";;
         p) AWS_PROFILE="$OPTARG";;
         r) IFS=',' read -ra REGIONS_TO_PROBE <<< "$OPTARG";;
         I) USE_INSTANCE_PROFILE=true;;
@@ -122,8 +123,8 @@ log_script_args() {
     if [ -n "$AWS_PROFILE" ]; then
         args_str="$args_str -p $AWS_PROFILE"
     fi
-    if [ -n "$TABLE_NAME" ]; then
-        args_str="$args_str -t $TABLE_NAME"
+    if [ ${#TABLE_NAMES[@]} -gt 0 ]; then
+        args_str="$args_str -t ${TABLE_NAMES[*]}"
     fi
     if [ ${#REGIONS_TO_PROBE[@]} -gt 0 ]; then
         args_str="$args_str -r ${REGIONS_TO_PROBE[*]}"
@@ -133,10 +134,10 @@ log_script_args() {
     fi
     
     log_message "Script started with arguments: $args_str" "INFO"
-    if [ -n "$TABLE_NAME" ]; then
-        log_message "TABLE_NAME: $TABLE_NAME" "INFO"
+    if [ ${#TABLE_NAMES[@]} -gt 0 ]; then
+        log_message "TABLE_NAMES: ${TABLE_NAMES[*]}" "INFO"
     else
-        log_message "No specific table specified, will process all tables" "INFO"
+        log_message "No specific tables specified, will process all tables" "INFO"
     fi
 }
 
@@ -224,11 +225,12 @@ check_aws_credentials() {
 
 get_sample_counts() {
     local table_name=$1
-    local start_time=$2
-    local current_time=$3
-    local iteration=$4
-    local period=${5:-$PERIOD}  # Use provided period or default to global PERIOD
-    log_function_call "get_sample_counts" "$table_name" "$start_time" "$current_time" "$iteration" "$period"
+    local region=$2
+    local start_time=$3
+    local current_time=$4
+    local iteration=$5
+    local period=${6:-$PERIOD}  # Use provided period or default to global PERIOD
+    log_function_call "get_sample_counts" "$table_name" "$region" "$start_time" "$current_time" "$iteration" "$period"
     
     # Validate input parameter
     if [ -z "$table_name" ]; then
@@ -236,8 +238,9 @@ get_sample_counts() {
         return 1
     fi
     
-    # Create table directory if it doesn't exist
-    local table_dir="${LOG_DIR}/${table_name}"
+    # Create region and table directory if it doesn't exist
+    local region_dir="${LOG_DIR}/${region}"
+    local table_dir="${region_dir}/${table_name}"
     mkdir -p "$table_dir"
     
     # Set profile argument if specified
@@ -349,11 +352,12 @@ get_sample_counts() {
 # Function to get P99 latency for all operations
 get_p99_latency() {
     local table_name=$1
-    local start_time=$2
-    local current_time=$3
-    local iteration=$4
-    local period=${5:-$PERIOD}  # Use provided period or default to global PERIOD
-    log_function_call "get_p99_latency" "$table_name" "$start_time" "$current_time" "$iteration" "$period"
+    local region=$2
+    local start_time=$3
+    local current_time=$4
+    local iteration=$5
+    local period=${6:-$PERIOD}  # Use provided period or default to global PERIOD
+    log_function_call "get_p99_latency" "$table_name" "$region" "$start_time" "$current_time" "$iteration" "$period"
     
     # Validate input parameter
     if [ -z "$table_name" ]; then
@@ -361,8 +365,9 @@ get_p99_latency() {
         return 1
     fi
     
-    # Create table directory if it doesn't exist
-    local table_dir="${LOG_DIR}/${table_name}"
+    # Create region and table directory if it doesn't exist
+    local region_dir="${LOG_DIR}/${region}"
+    local table_dir="${region_dir}/${table_name}"
     mkdir -p "$table_dir"
     
     # Set profile argument if specified
@@ -485,99 +490,106 @@ consolidate_table_logs() {
     
     log_message "Starting log consolidation for $period_type period..." "INFO"
     
-    # Process each table directory
-    for table_dir in "${LOG_DIR}"/*/; do
-        if [ ! -d "$table_dir" ]; then
+    # Process each region directory
+    for region_dir in "${LOG_DIR}"/*/; do
+        if [ ! -d "$region_dir" ]; then
             continue
         fi
-        
-        local table_name=$(basename "$table_dir")
-        log_message "Processing table: $table_name" "INFO"
-        
-        # Process each operation type (GetItem, Query, Scan, PutItem, etc.)
-        for op in "${READ_OPERATIONS[@]}" "${WRITE_OPERATIONS[@]}"; do
-            local op_dir="${table_dir}/${op}"
-            
-            if [ ! -d "$op_dir" ]; then
-                log_message "Operation directory not found: $op_dir" "DEBUG"
+        local region_name=$(basename "$region_dir")
+        log_message "Processing region: $region_name" "INFO"
+        # Process each table directory within the region
+        for table_dir in "$region_dir"/*/; do
+            if [ ! -d "$table_dir" ]; then
                 continue
             fi
+            local table_name=$(basename "$table_dir")
+            log_message "Processing table: $table_name in region: $region_name" "INFO"
             
-            # Process sample_count metrics
-            local sample_count_dir="${op_dir}/sample_count"
-            if [ -d "$sample_count_dir" ]; then
-                local consolidated_sample_count="${table_dir}/${table_name}_${op}_sample_count-${period_type}.log"
+            # Process each operation type (GetItem, Query, Scan, PutItem, etc.)
+            for op in "${READ_OPERATIONS[@]}" "${WRITE_OPERATIONS[@]}"; do
+                local op_dir="${table_dir}/${op}"
                 
-                # Add header to consolidated file
-                {
-                    echo "================================================"
-                    echo "TABLE: $table_name"
-                    echo "OPERATION: $op"
-                    echo "METRIC: SampleCount"
-                    if [ "$period_type" = "3hr" ]; then
-                        echo "PERIOD: 3 hours (20-minute intervals)"
-                    else
-                        echo "PERIOD: 7 days (24-hour intervals)"
-                    fi
-                    echo "GENERATED: $(date)"
-                    echo "================================================"
-                    echo ""
-                } > "$consolidated_sample_count"
-                
-                # Concatenate all sample count log files for this operation
-                if find "$sample_count_dir" -name "*.log" -type f | grep -q .; then
-                    find "$sample_count_dir" -name "*.log" -type f | sort | while read -r log_file; do
-                        echo "--- $(basename "$log_file") ---" >> "$consolidated_sample_count"
-                        cat "$log_file" >> "$consolidated_sample_count"
-                        echo "" >> "$consolidated_sample_count"
-                    done
-                    log_message "Created consolidated sample count log: $consolidated_sample_count" "INFO"
-                    
-                    # Delete raw files after consolidation
-                    # find "$sample_count_dir" -name "*.log" -type f -delete
-                    # log_message "Deleted raw sample count files for $op operation" "INFO"
-                else
-                    log_message "No sample count log files found for $op operation" "DEBUG"
+                if [ ! -d "$op_dir" ]; then
+                    log_message "Operation directory not found: $op_dir" "DEBUG"
+                    continue
                 fi
-            fi
-            
-            # Process p99_latency metrics
-            local p99_latency_dir="${op_dir}/p99_latency"
-            if [ -d "$p99_latency_dir" ]; then
-                local consolidated_p99_latency="${table_dir}/${table_name}_${op}_p99_latency-${period_type}.log"
                 
-                # Add header to consolidated file
-                {
-                    echo "================================================"
-                    echo "TABLE: $table_name"
-                    echo "OPERATION: $op"
-                    echo "METRIC: P99 Latency"
-                    if [ "$period_type" = "3hr" ]; then
-                        echo "PERIOD: 3 hours (20-minute intervals)"
-                    else
-                        echo "PERIOD: 7 days (24-hour intervals)"
-                    fi
-                    echo "GENERATED: $(date)"
-                    echo "================================================"
-                    echo ""
-                } > "$consolidated_p99_latency"
-                
-                # Concatenate all P99 latency log files for this operation
-                if find "$p99_latency_dir" -name "*.log" -type f | grep -q .; then
-                    find "$p99_latency_dir" -name "*.log" -type f | sort | while read -r log_file; do
-                        echo "--- $(basename "$log_file") ---" >> "$consolidated_p99_latency"
-                        cat "$log_file" >> "$consolidated_p99_latency"
-                        echo "" >> "$consolidated_p99_latency"
-                    done
-                    log_message "Created consolidated P99 latency log: $consolidated_p99_latency" "INFO"
+                # Process sample_count metrics
+                local sample_count_dir="${op_dir}/sample_count"
+                if [ -d "$sample_count_dir" ]; then
+                    local consolidated_sample_count="${table_dir}/${table_name}_${op}_sample_count-${period_type}.log"
                     
-                    # Delete raw files after consolidation
-                    # find "$p99_latency_dir" -name "*.log" -type f -delete
-                    # log_message "Deleted raw P99 latency files for $op operation" "INFO"
-                else
-                    log_message "No P99 latency log files found for $op operation" "DEBUG"
+                    # Add header to consolidated file
+                    {
+                        echo "================================================"
+                        echo "TABLE: $table_name"
+                        echo "OPERATION: $op"
+                        echo "METRIC: SampleCount"
+                        if [ "$period_type" = "3hr" ]; then
+                            echo "PERIOD: 3 hours (20-minute intervals)"
+                        else
+                            echo "PERIOD: 7 days (24-hour intervals)"
+                        fi
+                        echo "GENERATED: $(date)"
+                        echo "================================================"
+                        echo ""
+                    } > "$consolidated_sample_count"
+                    
+                    # Concatenate all sample count log files for this operation
+                    if find "$sample_count_dir" -name "*.log" -type f | grep -q .; then
+                        find "$sample_count_dir" -name "*.log" -type f | sort | while read -r log_file; do
+                            echo "--- $(basename "$log_file") ---" >> "$consolidated_sample_count"
+                            cat "$log_file" >> "$consolidated_sample_count"
+                            echo "" >> "$consolidated_sample_count"
+                        done
+                        log_message "Created consolidated sample count log: $consolidated_sample_count" "INFO"
+                        
+                        # Delete raw files after consolidation
+                        # find "$sample_count_dir" -name "*.log" -type f -delete
+                        # log_message "Deleted raw sample count files for $op operation" "INFO"
+                    else
+                        log_message "No sample count log files found for $op operation" "DEBUG"
+                    fi
                 fi
-            fi
+                
+                # Process p99_latency metrics
+                local p99_latency_dir="${op_dir}/p99_latency"
+                if [ -d "$p99_latency_dir" ]; then
+                    local consolidated_p99_latency="${table_dir}/${table_name}_${op}_p99_latency-${period_type}.log"
+                    
+                    # Add header to consolidated file
+                    {
+                        echo "================================================"
+                        echo "TABLE: $table_name"
+                        echo "OPERATION: $op"
+                        echo "METRIC: P99 Latency"
+                        if [ "$period_type" = "3hr" ]; then
+                            echo "PERIOD: 3 hours (20-minute intervals)"
+                        else
+                            echo "PERIOD: 7 days (24-hour intervals)"
+                        fi
+                        echo "GENERATED: $(date)"
+                        echo "================================================"
+                        echo ""
+                    } > "$consolidated_p99_latency"
+                    
+                    # Concatenate all P99 latency log files for this operation
+                    if find "$p99_latency_dir" -name "*.log" -type f | grep -q .; then
+                        find "$p99_latency_dir" -name "*.log" -type f | sort | while read -r log_file; do
+                            echo "--- $(basename "$log_file") ---" >> "$consolidated_p99_latency"
+                            cat "$log_file" >> "$consolidated_p99_latency"
+                            echo "" >> "$consolidated_p99_latency"
+                        done
+                        log_message "Created consolidated P99 latency log: $consolidated_p99_latency" "INFO"
+                        
+                        # Delete raw files after consolidation
+                        # find "$p99_latency_dir" -name "*.log" -type f -delete
+                        # log_message "Deleted raw P99 latency files for $op operation" "INFO"
+                    else
+                        log_message "No P99 latency log files found for $op operation" "DEBUG"
+                    fi
+                fi
+            done
         done
     done
     
@@ -629,8 +641,8 @@ main() {
             table_name=$(echo "$table_name" | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
             [[ -z "$table_name" ]] && continue
             
-            # If TABLE_NAME is specified, only process that table
-            if [ -n "$TABLE_NAME" ] && [ "$table_name" != "$TABLE_NAME" ]; then
+            # If TABLE_NAMES is specified, only process those tables
+            if [ ${#TABLE_NAMES[@]} -gt 0 ] && [[ ! " ${TABLE_NAMES[@]} " =~ " $table_name " ]]; then
                 continue
             fi
             
@@ -693,16 +705,13 @@ main() {
             continue
         fi
         
-        # Set the current table name
-        TABLE_NAME="$table_name"
-        
-        log_message "Starting processing for table: $TABLE_NAME in region $region" "INFO"
+        log_message "Starting processing for table: $table_name in region $region" "INFO"
         
         # Set AWS region for this table
         export AWS_DEFAULT_REGION="$region"
         
         while [ $iteration -le $max_iterations ]; do
-            log_message "Starting iteration $iteration of $max_iterations for table $TABLE_NAME" "INFO"
+            log_message "Starting iteration $iteration of $max_iterations for table $table_name" "INFO"
             log_message "Time range: $start_time to $current_time" "INFO"
             
             # Validate environment and variables
@@ -710,21 +719,21 @@ main() {
             
             # Get sample counts
             log_message "Collecting sample counts for iteration $iteration..." "INFO"
-            if ! get_sample_counts "$TABLE_NAME" "$start_time" "$current_time" "$iteration" "1"; then
+            if ! get_sample_counts "$table_name" "$region" "$start_time" "$current_time" "$iteration" "1"; then
                 log_message "Error: Failed to collect sample counts for iteration $iteration" "ERROR"
                 continue
             fi
             
             # Get P99 latency
             log_message "Collecting P99 latency metrics for iteration $iteration..." "INFO"
-            if ! get_p99_latency "$TABLE_NAME" "$start_time" "$current_time" "$iteration" "1"; then
+            if ! get_p99_latency "$table_name" "$region" "$start_time" "$current_time" "$iteration" "1"; then
                 log_message "Error: Failed to collect P99 latency metrics for iteration $iteration" "ERROR"
                 continue
             fi
             
-            log_message "Completed iteration $iteration of $max_iterations for table $TABLE_NAME" "INFO"
+            log_message "Completed iteration $iteration of $max_iterations for table $table_name" "INFO"
             echo "================================================"
-            echo "Statistics collected for table: $TABLE_NAME"
+            echo "Statistics collected for table: $table_name"
             echo "Region: $region"
             echo "Time range:"
             echo "Start: $start_time"
@@ -773,16 +782,13 @@ main() {
             continue
         fi
         
-        # Set the current table name
-        TABLE_NAME="$table_name"
-        
-        log_message "Starting 7-day processing for table: $TABLE_NAME in region $region" "INFO"
+        log_message "Starting 7-day processing for table: $table_name in region $region" "INFO"
         
         # Set AWS region for this table
         export AWS_DEFAULT_REGION="$region"
         
         while [ $iteration_7d -le $max_iterations_7d ]; do
-            log_message "Starting 7-day iteration $iteration_7d of $max_iterations_7d for table $TABLE_NAME" "INFO"
+            log_message "Starting 7-day iteration $iteration_7d of $max_iterations_7d for table $table_name" "INFO"
             log_message "Time range: $start_time_7d to $current_time_7d" "INFO"
             
             # Validate environment and variables
@@ -790,21 +796,21 @@ main() {
             
             # Get sample counts
             log_message "Collecting sample counts for 7-day iteration $iteration_7d..." "INFO"
-            if ! get_sample_counts "$TABLE_NAME" "$start_time_7d" "$current_time_7d" "$iteration_7d" "60"; then
+            if ! get_sample_counts "$table_name" "$region" "$start_time_7d" "$current_time_7d" "$iteration_7d" "60"; then
                 log_message "Error: Failed to collect sample counts for 7-day iteration $iteration_7d" "ERROR"
                 continue
             fi
             
             # Get P99 latency
             log_message "Collecting P99 latency metrics for 7-day iteration $iteration_7d..." "INFO"
-            if ! get_p99_latency "$TABLE_NAME" "$start_time_7d" "$current_time_7d" "$iteration_7d" "60"; then
+            if ! get_p99_latency "$table_name" "$region" "$start_time_7d" "$current_time_7d" "$iteration_7d" "60"; then
                 log_message "Error: Failed to collect P99 latency metrics for 7-day iteration $iteration_7d" "ERROR"
                 continue
             fi
             
-            log_message "Completed 7-day iteration $iteration_7d of $max_iterations_7d for table $TABLE_NAME" "INFO"
+            log_message "Completed 7-day iteration $iteration_7d of $max_iterations_7d for table $table_name" "INFO"
             echo "================================================"
-            echo "7-Day Statistics collected for table: $TABLE_NAME"
+            echo "7-Day Statistics collected for table: $table_name"
             echo "Region: $region"
             echo "Time range:"
             echo "Start: $start_time_7d"

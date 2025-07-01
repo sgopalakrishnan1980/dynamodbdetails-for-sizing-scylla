@@ -19,6 +19,135 @@ This repository contains scripts designed to help with DynamoDB analysis and met
   - DynamoDB: `dynamodb:ListTables`, `dynamodb:DescribeTable`
   - CloudWatch: `cloudwatch:GetMetricStatistics`
 
+## EC2 Instance Profile Authentication (-I Flag)
+
+The scripts support EC2 Instance Profile authentication using the `-I` flag, which is particularly useful when running the scripts on EC2 instances or in containerized environments where traditional AWS credentials are not available or desired.
+
+### How Instance Profile Authentication Works
+
+When the `-I` flag is used, the script follows this execution logic:
+
+1. **Metadata Token Retrieval**: 
+   - Makes a PUT request to `http://169.254.169.254/latest/api/token` with a 6-hour TTL
+   - This token is required for accessing EC2 instance metadata
+
+2. **Instance Profile Detection**:
+   - Retrieves the instance profile name from `http://169.254.169.254/latest/meta-data/iam/security-credentials/`
+   - Validates that an instance profile is attached to the EC2 instance
+
+3. **Credential Validation**:
+   - Uses `aws sts get-caller-identity` to verify the instance profile is properly configured
+   - Checks that the instance profile has the necessary permissions
+
+4. **Error Handling**:
+   - If not running on EC2, provides clear error messages
+   - If no instance profile is attached, reports the issue
+   - If permissions are insufficient, reports authentication failures
+
+### Requirements for Instance Profile Authentication
+
+#### EC2 Instance Requirements
+- **EC2 Instance**: Must be running on an AWS EC2 instance
+- **Instance Profile**: Must have an IAM role attached (instance profile)
+- **Network Access**: Must have access to EC2 metadata service (169.254.169.254)
+- **IAM Permissions**: The attached role must have the following permissions:
+  ```json
+  {
+    "Version": "2012-10-17",
+    "Statement": [
+      {
+        "Effect": "Allow",
+        "Action": [
+          "dynamodb:ListTables",
+          "dynamodb:DescribeTable",
+          "cloudwatch:GetMetricStatistics",
+          "sts:GetCallerIdentity"
+        ],
+        "Resource": "*"
+      }
+    ]
+  }
+  ```
+
+#### Container Requirements (when running in containers)
+- **EC2 Launch**: Container must be launched on an EC2 instance
+- **Instance Profile**: The EC2 instance must have an instance profile attached
+- **Metadata Access**: Container must have access to EC2 metadata service
+- **No AWS Credentials**: Should not have AWS_ACCESS_KEY_ID or AWS_SECRET_ACCESS_KEY set
+
+### Use Cases for Instance Profile Authentication
+
+#### 1. EC2-Based Execution
+```bash
+# Running directly on EC2 instance with instance profile
+./dynamo_metrics_collection.sh -I
+
+# Running with specific regions and tables
+./dynamo_metrics_collection.sh -I -r us-east-1,us-west-2 -t mytable
+```
+
+#### 2. Containerized Execution on EC2
+```bash
+# Running in Docker container on EC2 with instance profile
+docker run -it --rm \
+  -v $(pwd)/logs:/app/logs \
+  dynamodb-metrics-collector \
+  ./dynamo_metrics_collection.sh -I -r us-east-1
+```
+
+#### 3. Automated/CI-CD Pipelines
+```bash
+# In automated scripts where credentials are managed via instance profiles
+./dynamo_metrics_collection.sh -I -r us-east-1 -t production-table
+```
+
+### Advantages of Instance Profile Authentication
+
+1. **Security**: No need to store or pass AWS credentials
+2. **Automatic Rotation**: IAM roles handle credential rotation automatically
+3. **Least Privilege**: Can assign specific permissions to the instance profile
+4. **Auditability**: All actions are tied to the specific EC2 instance and role
+5. **Container Friendly**: Works seamlessly in containerized environments
+
+### Troubleshooting Instance Profile Issues
+
+#### Common Error Messages and Solutions
+
+**Error: "Could not retrieve EC2 metadata token. Not running on EC2?"**
+- **Cause**: Script is not running on an EC2 instance
+- **Solution**: Run on an EC2 instance or use traditional AWS credentials
+
+**Error: "Could not retrieve instance profile name from metadata. Not running on EC2 or no profile attached."**
+- **Cause**: No IAM role is attached to the EC2 instance
+- **Solution**: Attach an IAM role to the EC2 instance with appropriate permissions
+
+**Error: "Instance profile not properly configured or not authorized"**
+- **Cause**: The attached IAM role lacks necessary permissions
+- **Solution**: Add the required DynamoDB and CloudWatch permissions to the IAM role
+
+#### Verification Steps
+```bash
+# Check if running on EC2
+curl -s http://169.254.169.254/latest/meta-data/instance-id
+
+# Check instance profile
+curl -s http://169.254.169.254/latest/meta-data/iam/security-credentials/
+
+# Test AWS authentication
+aws sts get-caller-identity
+```
+
+### Comparison: Instance Profile vs Traditional Credentials
+
+| Aspect | Instance Profile (-I) | Traditional Credentials |
+|--------|----------------------|------------------------|
+| **Setup** | Requires EC2 + IAM role | Requires AWS CLI configuration |
+| **Security** | No credential storage | Credentials stored locally |
+| **Rotation** | Automatic | Manual |
+| **Portability** | EC2-specific | Works anywhere |
+| **Container Support** | Native | Requires credential mounting |
+| **CI/CD Integration** | Excellent | Good |
+
 ## Installation
 
 ### Option 1: Direct Installation
@@ -147,9 +276,9 @@ These scripts collect detailed CloudWatch metrics for DynamoDB tables including 
 
 #### Options
 - `-t <table_name>`  Optional: Specific table to process. If not provided, all tables will be processed.
-- `-p <aws_profile>` Optional: AWS profile to use
+- `-p <aws_profile>` Optional: AWS profile to use (cannot be used with `-I`)
 - `-r <regions>`     Optional: Comma-separated list of regions to process. If not provided, uses current region.
-- `-I`               Optional: Use EC2 Instance Profile for authentication
+- `-I`               Optional: Use EC2 Instance Profile for authentication (requires running on EC2 with attached IAM role)
 
 #### Examples
 ```bash
@@ -164,6 +293,15 @@ These scripts collect detailed CloudWatch metrics for DynamoDB tables including 
 
 # Process 'mytable' in specified regions with custom profile
 ./dynamo_metrics_collection.sh -t mytable -r us-east-1,us-west-2 -p my-aws-profile
+
+# Use EC2 Instance Profile authentication (must run on EC2)
+./dynamo_metrics_collection.sh -I
+
+# Use Instance Profile with specific regions and tables
+./dynamo_metrics_collection.sh -I -r us-east-1,us-west-2 -t mytable
+
+# Container execution with Instance Profile
+docker run -it --rm dynamodb-metrics-collector ./dynamo_metrics_collection.sh -I -r us-east-1
 ```
 
 ## Script Flow
@@ -182,6 +320,10 @@ These scripts collect detailed CloudWatch metrics for DynamoDB tables including 
 +------------------+
 | AWS Configuration|
 | & Credentials    |
+| - Check -I flag  |
+| - Instance Profile|
+|   or Traditional |
+|   Credentials    |
 +------------------+
          |
          v
@@ -340,9 +482,11 @@ dynamo_metrics_logs/
 
 #### `check_aws_credentials`
 - Validates AWS credentials and permissions
-- Supports AWS profiles
-- EC2 instance profile detection
-- Comprehensive error reporting
+- Supports AWS profiles (when not using `-I` flag)
+- EC2 instance profile detection and validation (when using `-I` flag)
+- Comprehensive error reporting with specific guidance for each authentication method
+- Handles metadata token retrieval for EC2 instance profiles
+- Validates instance profile permissions and configuration
 
 #### `get_default_region`
 - Multiple region detection methods
@@ -405,6 +549,7 @@ dynamo_metrics_logs/
 11. **Table Filtering**: Process specific tables or all tables
 12. **Comprehensive Metrics**: Sample counts and P99 latency for all operations
 13. **Platform Compatibility**: Added macOS-specific versions
+14. **EC2 Instance Profile Support**: Enhanced `-I` flag with detailed authentication logic and comprehensive documentation
 
 ## Contributing
 
