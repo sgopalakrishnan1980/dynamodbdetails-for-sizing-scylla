@@ -1,0 +1,42 @@
+# Git files
+.git
+.gitignore
+
+# Docker files
+Dockerfile
+.dockerignore
+
+# Build artifacts
+get_dynamodb_metrics
+get_dynamodb_metrics-*
+
+# Log directories
+dynamo_metrics_logs_*
+
+# Documentation
+README.md
+*.md
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Temporary files
+*.tmp
+*.temp
+
+# Test files
+*_test.go
+test/
+
+# Vendor directory (if using vendoring)
+vendor/
+
+# Go workspace files
+go.work 

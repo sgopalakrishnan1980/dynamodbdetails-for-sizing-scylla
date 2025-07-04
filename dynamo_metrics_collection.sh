@@ -13,6 +13,7 @@ REGIONS_TO_PROBE=()  # Array to store regions to probe
 TABLE_NAMES=()  # Array to store table names to process
 USE_INSTANCE_PROFILE=false
 TOTAL_AWS_CALLS=0  # Global counter for all AWS calls made during script execution
+WAIT_AWS_CALLS=0   # Counter for AWS calls since last wait, used to determine when to wait
 # Create log directory if it doesn't exist
 mkdir -p "$LOG_DIR"
 
@@ -28,8 +29,9 @@ log_message() {
     echo "[$timestamp] [$level] $message" | tee -a "$LOG_FILE"
 }
 
-# Log initial counter value
+# Log initial counter values
 log_message "Initial AWS call counter: $TOTAL_AWS_CALLS" "DEBUG"
+log_message "Initial wait AWS call counter: $WAIT_AWS_CALLS" "DEBUG"
 
 # Arrays for operation types
 READ_OPERATIONS=("GetItem" "Query" "Scan")
@@ -279,9 +281,10 @@ get_sample_counts() {
         echo "$aws_cmd" | tee -a "$LOG_FILE"
         
         # Get metrics and append to log file in background
-        # Increment global AWS call counter before starting background process
+        # Increment both AWS call counters before starting background process
         TOTAL_AWS_CALLS=$((TOTAL_AWS_CALLS + 1))
-        log_message "AWS call counter incremented to: $TOTAL_AWS_CALLS" "DEBUG"
+        WAIT_AWS_CALLS=$((WAIT_AWS_CALLS + 1))
+        log_message "AWS call counters incremented - Total: $TOTAL_AWS_CALLS, Wait: $WAIT_AWS_CALLS" "DEBUG"
         (
             aws cloudwatch get-metric-statistics $profile_arg \
                 --namespace AWS/DynamoDB \
@@ -326,9 +329,10 @@ get_sample_counts() {
         echo "$aws_cmd" | tee -a "$LOG_FILE"
         
         # Get metrics and append to log file in background
-        # Increment global AWS call counter before starting background process
+        # Increment both AWS call counters before starting background process
         TOTAL_AWS_CALLS=$((TOTAL_AWS_CALLS + 1))
-        log_message "AWS call counter incremented to: $TOTAL_AWS_CALLS" "DEBUG"
+        WAIT_AWS_CALLS=$((WAIT_AWS_CALLS + 1))
+        log_message "AWS call counters incremented - Total: $TOTAL_AWS_CALLS, Wait: $WAIT_AWS_CALLS" "DEBUG"
         (
             aws cloudwatch get-metric-statistics $profile_arg \
                 --namespace AWS/DynamoDB \
@@ -342,9 +346,6 @@ get_sample_counts() {
             echo "" >> "$log_file"
         ) &
     done
-    
-    # Wait for all background processes to complete
-    wait
     
     log_message "Sample counts collection completed for iteration $iteration" "INFO"
 }
@@ -396,7 +397,7 @@ get_p99_latency() {
         local log_file="${metric_dir}/p99_${op}_${start_time_filename}to${end_time_filename}.log"
         
         # Construct the AWS CLI command
-        local aws_cmd="aws cloudwatch get-metric-statistics $profile_arg --namespace AWS/DynamoDB --metric-name SuccessfulRequestLatency --start-time \"$start_time\" --end-time \"$current_time\" --period $period --extended-statistics p99 --dimensions Name=TableName,Value=\"$table_name\" Name=Operation,Value=\"$op\" --output text"
+        local aws_cmd="aws cloudwatch get-metric-statistics $profile_arg --namespace AWS/DynamoDB --metric-name ${op}Latency --start-time \"$start_time\" --end-time \"$current_time\" --period $period --extended-statistics p99 --dimensions Name=TableName,Value=\"$table_name\" Name=Operation,Value=\"$op\" --output text"
         
         # Log the AWS CLI command
         log_message "Executing CloudWatch API call:" "INFO"
@@ -405,13 +406,14 @@ get_p99_latency() {
         echo "$aws_cmd" | tee -a "$LOG_FILE"
         
         # Get P99 metrics and write to log file in background
-        # Increment global AWS call counter before starting background process
+        # Increment both AWS call counters before starting background process
         TOTAL_AWS_CALLS=$((TOTAL_AWS_CALLS + 1))
-        log_message "AWS call counter incremented to: $TOTAL_AWS_CALLS" "DEBUG"
+        WAIT_AWS_CALLS=$((WAIT_AWS_CALLS + 1))
+        log_message "AWS call counters incremented - Total: $TOTAL_AWS_CALLS, Wait: $WAIT_AWS_CALLS" "DEBUG"
         (
             aws cloudwatch get-metric-statistics $profile_arg \
                 --namespace AWS/DynamoDB \
-                --metric-name SuccessfulRequestLatency \
+                --metric-name ${op}Latency \
                 --start-time "$start_time" \
                 --end-time "$current_time" \
                 --period $period \
@@ -451,9 +453,10 @@ get_p99_latency() {
         echo "$aws_cmd" | tee -a "$LOG_FILE"
         
         # Get P99 metrics and write to log file in background
-        # Increment global AWS call counter before starting background process
+        # Increment both AWS call counters before starting background process
         TOTAL_AWS_CALLS=$((TOTAL_AWS_CALLS + 1))
-        log_message "AWS call counter incremented to: $TOTAL_AWS_CALLS" "DEBUG"
+        WAIT_AWS_CALLS=$((WAIT_AWS_CALLS + 1))
+        log_message "AWS call counters incremented - Total: $TOTAL_AWS_CALLS, Wait: $WAIT_AWS_CALLS" "DEBUG"
         (
             aws cloudwatch get-metric-statistics $profile_arg \
                 --namespace AWS/DynamoDB \
@@ -468,8 +471,6 @@ get_p99_latency() {
         log_message "P99 latency metrics for $op will be saved to: $log_file" "INFO"
     done
     
-    # Wait for all background processes to complete
-    wait
 }
 
 # Function to validate required variables
@@ -495,19 +496,30 @@ consolidate_table_logs() {
         if [ ! -d "$region_dir" ]; then
             continue
         fi
-        local region_name=$(basename "$region_dir")
+        # Remove trailing slash and get basename
+        local region_name=$(basename "${region_dir%/}")
+        if [ -z "$region_name" ]; then
+            log_message "Warning: Empty region name found, skipping" "WARN"
+            continue
+        fi
         log_message "Processing region: $region_name" "INFO"
+        
         # Process each table directory within the region
         for table_dir in "$region_dir"/*/; do
             if [ ! -d "$table_dir" ]; then
                 continue
             fi
-            local table_name=$(basename "$table_dir")
+            # Remove trailing slash and get basename
+            local table_name=$(basename "${table_dir%/}")
+            if [ -z "$table_name" ]; then
+                log_message "Warning: Empty table name found in region $region_name, skipping" "WARN"
+                continue
+            fi
             log_message "Processing table: $table_name in region: $region_name" "INFO"
             
             # Process each operation type (GetItem, Query, Scan, PutItem, etc.)
             for op in "${READ_OPERATIONS[@]}" "${WRITE_OPERATIONS[@]}"; do
-                local op_dir="${table_dir}/${op}"
+                local op_dir="${table_dir}${op}"
                 
                 if [ ! -d "$op_dir" ]; then
                     log_message "Operation directory not found: $op_dir" "DEBUG"
@@ -517,7 +529,7 @@ consolidate_table_logs() {
                 # Process sample_count metrics
                 local sample_count_dir="${op_dir}/sample_count"
                 if [ -d "$sample_count_dir" ]; then
-                    local consolidated_sample_count="${table_dir}/${table_name}_${op}_sample_count-${period_type}.log"
+                    local consolidated_sample_count="${table_dir}${table_name}_${op}_sample_count-${period_type}.log"
                     
                     # Add header to consolidated file
                     {
@@ -555,7 +567,7 @@ consolidate_table_logs() {
                 # Process p99_latency metrics
                 local p99_latency_dir="${op_dir}/p99_latency"
                 if [ -d "$p99_latency_dir" ]; then
-                    local consolidated_p99_latency="${table_dir}/${table_name}_${op}_p99_latency-${period_type}.log"
+                    local consolidated_p99_latency="${table_dir}${table_name}_${op}_p99_latency-${period_type}.log"
                     
                     # Add header to consolidated file
                     {
@@ -731,6 +743,14 @@ main() {
                 continue
             fi
             
+            # Centralized wait check after processing both sample counts and P99 latency
+            if [ $WAIT_AWS_CALLS -ge 1000 ]; then
+                log_message "Wait counter reached $WAIT_AWS_CALLS, waiting for background processes..." "INFO"
+                wait
+                log_message "Background processes completed, resetting counter..." "INFO"
+                WAIT_AWS_CALLS=0
+            fi
+            
             log_message "Completed iteration $iteration of $max_iterations for table $table_name" "INFO"
             echo "================================================"
             echo "Statistics collected for table: $table_name"
@@ -808,6 +828,14 @@ main() {
                 continue
             fi
             
+            # Centralized wait check after processing both sample counts and P99 latency
+            if [ $WAIT_AWS_CALLS -ge 1000 ]; then
+                log_message "Wait counter reached $WAIT_AWS_CALLS, waiting for background processes..." "INFO"
+                wait
+                log_message "Background processes completed, resetting counter..." "INFO"
+                WAIT_AWS_CALLS=0
+            fi
+            
             log_message "Completed 7-day iteration $iteration_7d of $max_iterations_7d for table $table_name" "INFO"
             echo "================================================"
             echo "7-Day Statistics collected for table: $table_name"
@@ -837,8 +865,16 @@ main() {
     log_message "Starting consolidation of 7-day collection data..." "INFO"
     consolidate_table_logs "7day"
     
-    # Final wait to ensure all background processes are complete
-    wait
+    # Final wait to ensure all background processes are complete only if wait AWS call counter is 1000 or more
+    if [ $WAIT_AWS_CALLS -ge 1000 ]; then
+        log_message "Final wait: Wait AWS call counter reached $WAIT_AWS_CALLS, waiting for all background processes to complete..." "INFO"
+        wait
+        log_message "All background processes completed, resetting wait counter..." "INFO"
+        WAIT_AWS_CALLS=0
+        log_message "Final wait AWS call counter reset to: $WAIT_AWS_CALLS" "DEBUG"
+    else
+        log_message "Final check: Wait AWS call counter is $WAIT_AWS_CALLS (less than 1000), finishing without final wait..." "DEBUG"
+    fi
     
     log_message "Metrics collection completed successfully for all tables" "INFO"
     echo "================================================"

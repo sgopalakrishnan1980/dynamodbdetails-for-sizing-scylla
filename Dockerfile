@@ -1,20 +1,62 @@
-FROM debian:bookworm-slim
+# Multi-stage build for Go DynamoDB Metrics Collection Tool
 
-# Install required dependencies
-RUN apt-get update && apt-get install -y \
-    curl unzip jq git groff less python3-pip ca-certificates vim-tiny && \
-    apt-get clean && rm -rf /var/lib/apt/lists/*
+# Build stage
+FROM golang:1.21-alpine AS builder
 
-# Install AWS CLI v2
-RUN curl "https://awscli.amazonaws.com/awscli-exe-linux-x86_64.zip" -o "awscliv2.zip" && \
-    unzip awscliv2.zip && \
-    ./aws/install && \
-    rm -rf awscliv2.zip aws
+# Set working directory
+WORKDIR /app
 
-# Clone the GitHub repository
-RUN git clone https://github.com/sgopalakrishnan1980/dynamodbdetails-for-sizing-scylla.git /app/dynamodbdetails
+# Install git and ca-certificates (needed for go mod download)
+RUN apk add --no-cache git ca-certificates
 
-WORKDIR /app/dynamodbdetails
+# Copy go mod files
+COPY go.mod go.sum ./
 
-CMD [ "bash" ]
+# Download dependencies
+RUN go mod download
+
+# Copy source code
+COPY . .
+
+# Build the application
+RUN CGO_ENABLED=0 GOOS=linux go build -a -installsuffix cgo -o get_dynamodb_metrics .
+
+# Runtime stage
+FROM alpine:latest
+
+# Install ca-certificates for HTTPS requests
+RUN apk --no-cache add ca-certificates curl
+
+# Create non-root user
+RUN addgroup -g 1001 -S appgroup && \
+    adduser -u 1001 -S appuser -G appgroup
+
+# Set working directory
+WORKDIR /app
+
+# Copy the binary from builder stage
+COPY --from=builder /app/get_dynamodb_metrics .
+
+# Create directory for logs
+RUN mkdir -p /app/logs && \
+    chown -R appuser:appgroup /app
+
+# Switch to non-root user
+USER appuser
+
+# Set environment variables
+ENV AWS_SDK_LOAD_CONFIG=1
+
+# Expose port (if needed for health checks)
+EXPOSE 8080
+
+# Health check
+HEALTHCHECK --interval=30s --timeout=10s --start-period=5s --retries=3 \
+    CMD curl -f http://localhost:8080/health || exit 1
+
+# Default command
+ENTRYPOINT ["./get_dynamodb_metrics"]
+
+# Default arguments (can be overridden)
+CMD ["--help"]
 
