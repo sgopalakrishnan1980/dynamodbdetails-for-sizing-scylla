@@ -271,7 +271,7 @@ get_sample_counts() {
         log_message "Created metrics log file: $log_file" "INFO"
         
         # Construct the AWS CLI command
-        local aws_cmd="aws cloudwatch get-metric-statistics $profile_arg --namespace AWS/DynamoDB --metric-name ${op}Latency --start-time \"$start_time\" --end-time \"$current_time\" --period $period --statistics SampleCount --dimensions Name=TableName,Value=\"$table_name\" Name=Operation,Value=\"$op\" --output text"
+        local aws_cmd="aws cloudwatch get-metric-statistics $profile_arg --namespace AWS/DynamoDB --metric-name SuccessfulRequestLatency --start-time \"$start_time\" --end-time \"$current_time\" --period $period --statistics SampleCount --dimensions Name=TableName,Value=\"$table_name\" Name=Operation,Value=\"$op\" --output text"
         
         # Log the AWS CLI command
         log_message "Executing CloudWatch API call:" "INFO"
@@ -287,7 +287,7 @@ get_sample_counts() {
         (
             aws cloudwatch get-metric-statistics $profile_arg \
                 --namespace AWS/DynamoDB \
-                --metric-name ${op}Latency \
+                --metric-name SuccessfulRequestLatency \
                 --start-time "$start_time" \
                 --end-time "$current_time" \
                 --period $period \
@@ -443,7 +443,7 @@ get_p99_latency() {
         local log_file="${metric_dir}/${start_time_filename}to${end_time_filename}.log"
         
         # Construct the AWS CLI command
-        local aws_cmd="aws cloudwatch get-metric-statistics $profile_arg --namespace AWS/DynamoDB --metric-name ${op}Latency --start-time \"$start_time\" --end-time \"$current_time\" --period $period --extended-statistics p99 --dimensions Name=TableName,Value=\"$table_name\" Name=Operation,Value=\"$op\" --output text"
+        local aws_cmd="aws cloudwatch get-metric-statistics $profile_arg --namespace AWS/DynamoDB --metric-name SuccessfulRequestLatency --start-time \"$start_time\" --end-time \"$current_time\" --period $period --extended-statistics p99 --dimensions Name=TableName,Value=\"$table_name\" Name=Operation,Value=\"$op\" --output text"
         
         # Log the AWS CLI command
         log_message "Executing CloudWatch API call:" "INFO"
@@ -459,7 +459,7 @@ get_p99_latency() {
         (
             aws cloudwatch get-metric-statistics $profile_arg \
                 --namespace AWS/DynamoDB \
-                --metric-name ${op}Latency \
+                --metric-name SuccessfulRequestLatency \
                 --start-time "$start_time" \
                 --end-time "$current_time" \
                 --period $period \

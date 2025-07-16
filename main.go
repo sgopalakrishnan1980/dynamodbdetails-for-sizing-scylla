@@ -160,8 +160,8 @@ func (c *AWSClient) DescribeTable(ctx context.Context, tableName string) (*dynam
 
 // Get CloudWatch metrics
 func (c *AWSClient) GetMetricStatistics(ctx context.Context, tableName, operation, metricName string, startTime, endTime time.Time, period int64) (*cloudwatch.GetMetricStatisticsOutput, error) {
-	// Always use <Operation>Latency for all operations
-	finalMetricName := operation + "Latency"
+	// Use SuccessfulRequestLatency for all operations (both SampleCount and P99)
+	finalMetricName := "SuccessfulRequestLatency"
 
 	input := &cloudwatch.GetMetricStatisticsInput{
 		Namespace:  aws.String("AWS/DynamoDB"),
