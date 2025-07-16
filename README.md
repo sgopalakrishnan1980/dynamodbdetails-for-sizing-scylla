@@ -111,6 +111,87 @@ AWS_PROFILE=production docker-compose run dynamodb-metrics -p production
 AWS_DEFAULT_REGION=us-east-1 docker-compose run dynamodb-metrics -r us-east-1
 ```
 
+### Interactive Container Shell for AWS Configuration
+
+For advanced AWS authentication scenarios (Instance Profile, AWS Roles, etc.), you can attach a shell to the container and configure AWS credentials interactively:
+
+```bash
+# Start an interactive shell in the container
+docker-compose run --rm dynamodb-metrics /bin/sh
+
+# Or build and run directly with Docker
+docker build -t dynamodb-metrics .
+docker run -it --rm dynamodb-metrics /bin/sh
+```
+
+#### Configuring AWS Credentials in Container
+
+Once inside the container shell, you can configure AWS credentials:
+
+```bash
+# Configure AWS CLI interactively
+aws configure
+
+# Or configure with specific profile
+aws configure --profile my-profile
+
+# Set environment variables for AWS credentials
+export AWS_ACCESS_KEY_ID="your-access-key"
+export AWS_SECRET_ACCESS_KEY="your-secret-key"
+export AWS_DEFAULT_REGION="us-east-1"
+
+# For AWS Role/Instance Profile usage
+export AWS_ROLE_ARN="arn:aws:iam::123456789012:role/MyRole"
+export AWS_SESSION_TOKEN="your-session-token"  # If using temporary credentials
+
+# Test AWS credentials
+aws sts get-caller-identity
+
+# Run the metrics collection tool
+./get_dynamodb_metrics -I  # Use instance profile
+# or
+./get_dynamodb_metrics -p my-profile  # Use configured profile
+```
+
+#### Using AWS Roles and Instance Profiles
+
+For EC2 instances or containers with IAM roles:
+
+```bash
+# Set up for instance profile usage
+export AWS_DEFAULT_REGION="us-east-1"
+
+# The container will automatically use instance metadata if available
+./get_dynamodb_metrics -I
+
+# For cross-account role assumption
+aws sts assume-role --role-arn "arn:aws:iam::123456789012:role/CrossAccountRole" --role-session-name "MetricsCollection"
+# Copy the credentials from the output and set environment variables
+export AWS_ACCESS_KEY_ID="ASIA..."
+export AWS_SECRET_ACCESS_KEY="..."
+export AWS_SESSION_TOKEN="..."
+```
+
+#### Container Environment Variables
+
+You can also pass AWS configuration via environment variables when running the container:
+
+```bash
+# Run with environment variables
+docker run -it --rm \
+  -e AWS_ACCESS_KEY_ID="your-access-key" \
+  -e AWS_SECRET_ACCESS_KEY="your-secret-key" \
+  -e AWS_DEFAULT_REGION="us-east-1" \
+  -e AWS_SESSION_TOKEN="your-session-token" \
+  dynamodb-metrics
+
+# Or with Docker Compose
+AWS_ACCESS_KEY_ID="your-access-key" \
+AWS_SECRET_ACCESS_KEY="your-secret-key" \
+AWS_DEFAULT_REGION="us-east-1" \
+docker-compose run dynamodb-metrics
+```
+
 ## Output Structure
 
 The tool creates a timestamped log directory with the following structure:
