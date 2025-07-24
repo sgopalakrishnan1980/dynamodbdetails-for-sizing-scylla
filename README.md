@@ -1,4 +1,4 @@
-# DynamoDB Metrics Collection Tool
+# DynamoDB Metrics Collection Tool updated 17-07-2025
 
 > **💡 Simple Alternative**: If you prefer a simple script without any programming language runtime, check out the [Bash Script Version](./dynamo_metrics_collection.sh) or [macOS Script Version](./dynamo_metrics_collection_mac.sh) that only requires AWS CLI and standard Unix tools.
 

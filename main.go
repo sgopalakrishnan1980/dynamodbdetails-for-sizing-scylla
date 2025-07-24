@@ -450,6 +450,118 @@ GENERATED: %s
 	return nil
 }
 
+// Write table details to log file
+func writeTableDetails(detailsLogPath, tableName, region string, tableDetails *dynamodb.DescribeTableOutput) error {
+	file, err := os.OpenFile(detailsLogPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		return fmt.Errorf("failed to open table details log file: %v", err)
+	}
+	defer file.Close()
+
+	// Write table header
+	header := fmt.Sprintf("=== Table: %s (Region: %s) ===\n", tableName, region)
+	if _, err := file.WriteString(header); err != nil {
+		return fmt.Errorf("failed to write table header: %v", err)
+	}
+
+	// Convert table details to JSON for logging
+	jsonData, err := json.MarshalIndent(tableDetails, "", "  ")
+	if err != nil {
+		return fmt.Errorf("failed to marshal table details to JSON: %v", err)
+	}
+
+	// Add region prefix to each line
+	lines := strings.Split(string(jsonData), "\n")
+	for _, line := range lines {
+		if line != "" {
+			regionPrefixedLine := fmt.Sprintf("Region: %s | %s\n", region, line)
+			if _, err := file.WriteString(regionPrefixedLine); err != nil {
+				return fmt.Errorf("failed to write table details: %v", err)
+			}
+		}
+	}
+
+	// Add empty line separator
+	if _, err := file.WriteString("\n"); err != nil {
+		return fmt.Errorf("failed to write separator: %v", err)
+	}
+
+	return nil
+}
+
+// Write table details to region-specific log file in table format
+func writeTableDetailsTableFormat(detailsLogPath, tableName, region string, tableDetails *dynamodb.DescribeTableOutput) error {
+	file, err := os.OpenFile(detailsLogPath, os.O_APPEND|os.O_CREATE|os.O_WRONLY, 0644)
+	if err != nil {
+		return fmt.Errorf("failed to open region table details log file: %v", err)
+	}
+	defer file.Close()
+
+	// Write table header
+	header := fmt.Sprintf("=== Table: %s (Region: %s) ===\n", tableName, region)
+	if _, err := file.WriteString(header); err != nil {
+		return fmt.Errorf("failed to write table header: %v", err)
+	}
+
+	// Create a simplified table format similar to AWS CLI table output
+	tableInfo := fmt.Sprintf("Region: %s | Table Name: %s\n", region, tableName)
+	if tableDetails.Table.TableName != nil {
+		tableInfo += fmt.Sprintf("Region: %s | Table Name: %s\n", region, *tableDetails.Table.TableName)
+	}
+
+	// Table status is an enum, not a pointer
+	tableInfo += fmt.Sprintf("Region: %s | Table Status: %s\n", region, tableDetails.Table.TableStatus)
+
+	if tableDetails.Table.CreationDateTime != nil {
+		tableInfo += fmt.Sprintf("Region: %s | Creation Date: %s\n", region, tableDetails.Table.CreationDateTime.Format("2006-01-02 15:04:05"))
+	}
+
+	if tableDetails.Table.ItemCount != nil {
+		tableInfo += fmt.Sprintf("Region: %s | Item Count: %d\n", region, *tableDetails.Table.ItemCount)
+	}
+
+	if tableDetails.Table.TableSizeBytes != nil {
+		tableInfo += fmt.Sprintf("Region: %s | Table Size: %d bytes\n", region, *tableDetails.Table.TableSizeBytes)
+	}
+
+	// Add attribute definitions
+	if len(tableDetails.Table.AttributeDefinitions) > 0 {
+		tableInfo += fmt.Sprintf("Region: %s | Attribute Definitions:\n", region)
+		for _, attr := range tableDetails.Table.AttributeDefinitions {
+			if attr.AttributeName != nil {
+				tableInfo += fmt.Sprintf("Region: %s |   - %s (%s)\n", region, *attr.AttributeName, attr.AttributeType)
+			}
+		}
+	}
+
+	// Add key schema
+	if len(tableDetails.Table.KeySchema) > 0 {
+		tableInfo += fmt.Sprintf("Region: %s | Key Schema:\n", region)
+		for _, key := range tableDetails.Table.KeySchema {
+			if key.AttributeName != nil {
+				tableInfo += fmt.Sprintf("Region: %s |   - %s (%s)\n", region, *key.AttributeName, key.KeyType)
+			}
+		}
+	}
+
+	// Add billing mode
+	if tableDetails.Table.BillingModeSummary != nil {
+		tableInfo += fmt.Sprintf("Region: %s | Billing Mode: %s\n", region, tableDetails.Table.BillingModeSummary.BillingMode)
+	}
+
+	// Write the table format information
+	if _, err := file.WriteString(tableInfo); err != nil {
+		return fmt.Errorf("failed to write table format details: %v", err)
+	}
+
+	// Add empty line separator
+	if _, err := file.WriteString("\n"); err != nil {
+		return fmt.Errorf("failed to write separator: %v", err)
+	}
+
+	return nil
+}
+
 // Get period description
 func getPeriodDescription(periodType string) string {
 	if periodType == "3hr" {
@@ -474,6 +586,10 @@ func runMetricsCollection(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to initialize logger: %v", err)
 	}
 	defer logger.Close()
+
+	// Create table details log file
+	detailsLogPath := filepath.Join(logDir, "table_detailed.log")
+	logger.Log("INFO", fmt.Sprintf("Creating table details log file: %s", detailsLogPath))
 
 	logger.Log("INFO", "Starting DynamoDB metrics collection")
 	logger.Log("DEBUG", fmt.Sprintf("Initial AWS call counter: %d", totalAWSCalls))
@@ -530,8 +646,40 @@ func runMetricsCollection(cmd *cobra.Command, args []string) error {
 			tables = filteredTables
 		}
 
-		// Add region info to table names
+		// Create region-specific table details log file
+		regionDetailsLogPath := filepath.Join(logDir, region, "table_detailed.log")
+		if err := os.MkdirAll(filepath.Dir(regionDetailsLogPath), 0755); err != nil {
+			logger.Log("ERROR", fmt.Sprintf("Failed to create region directory for %s: %v", region, err))
+		}
+
+		// Validate tables exist and are accessible using describe-table
+		var validatedTables []string
 		for _, table := range tables {
+			logger.Log("INFO", fmt.Sprintf("Validating table: %s in region %s", table, region))
+
+			// Call describe-table to validate table exists and is accessible
+			tableDetails, err := client.DescribeTable(context.Background(), table)
+			if err != nil {
+				logger.Log("ERROR", fmt.Sprintf("Failed to describe table %s in region %s: %v", table, region, err))
+				continue
+			}
+
+			// Write table details to main log file (JSON format)
+			if err := writeTableDetails(detailsLogPath, table, region, tableDetails); err != nil {
+				logger.Log("ERROR", fmt.Sprintf("Failed to write table details for %s in region %s: %v", table, region, err))
+			}
+
+			// Write table details to region-specific log file (table format)
+			if err := writeTableDetailsTableFormat(regionDetailsLogPath, table, region, tableDetails); err != nil {
+				logger.Log("ERROR", fmt.Sprintf("Failed to write table format details for %s in region %s: %v", table, region, err))
+			}
+
+			logger.Log("INFO", fmt.Sprintf("Successfully validated table: %s in region %s", table, region))
+			validatedTables = append(validatedTables, table)
+		}
+
+		// Add region info to validated table names
+		for _, table := range validatedTables {
 			allTables = append(allTables, fmt.Sprintf("%s:%s", table, region))
 		}
 	}
