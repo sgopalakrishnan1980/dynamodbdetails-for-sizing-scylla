@@ -317,6 +317,48 @@ All logs are written to both console and log files for easy debugging and monito
 - Rate limiting behavior
 - Log consolidation functionality
 
+## Visualize Results
+After collecting DynamoDB metrics, you can visualize the data using the built-in Dash web interface.
+
+### Step 1: Install Requirements
+
+```bash
+pip install -r postprocess/requirements.txt
+```
+
+The requirements.txt file includes only minimal libraries needed for visualizing data: dash, 
+
+### Step 2: Load Collected Metrics
+Use the CLI to process and load the metrics into structured JSON files for visualization:
+
+```bash
+python postprocess/postprocess.py load --folder path/to/dynamo_metrics_logs/
+```
+
+This command will:
+- Traverse your collected metric folders
+- Extract sample count and P99 latency per table, region, and operation
+- Save the parsed output to:
+    - ./data/sample_count_data.json
+    - ./data/sample_p99_data.json
+
+### Step 3: Start the Visualization UI
+Once the data is loaded, launch the Dash app with:
+
+```bash
+python postprocess/postprocess.py UI
+```
+
+This opens an interactive dashboard in your browser with:
+- Sample Count Tab – Displays per-table sample counts for each DynamoDB operation
+- P99 Latency Tab – Visualizes P99 latency values across operations and tables
+- Metadata Tab – Displays available tables, regions, and operations as context
+
+Each graph supports:
+- Interactive zooming
+- Hover tooltips
+- Legend toggles to turn traces on/off
+
 ## Troubleshooting
 
 ### Common Issues
