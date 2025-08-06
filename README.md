@@ -9,6 +9,7 @@ A comprehensive tool for collecting DynamoDB metrics from CloudWatch. This repos
 - **🖥️ Go Version** (This README) - Cross-platform, compiled binary
 - **🐚 [Bash Script](./dynamo_metrics_collection.sh)** - Linux/Unix systems, no compilation needed
 - **🍎 [macOS Script](./dynamo_metrics_collection_mac.sh)** - macOS optimized version
+- **📊 [Python Excel Processor](./process_dynamodb_logs.py)** - Process log files into Excel format
 
 ## Features
 
@@ -340,6 +341,29 @@ All logs are written to both console and log files for easy debugging and monito
    - Reduce wait threshold with `-w` flag
    - Check CloudWatch API quotas
    - Monitor AWS API call limits
+
+## 📊 Excel Processing
+
+After collecting metrics, you can process the log files into an Excel format using the Python script:
+
+### Processing Logs to Excel
+
+```bash
+# Install Python dependencies
+pip install -r requirements.txt
+
+# Process log files to Excel
+python process_dynamodb_logs.py <log_directory_path>
+```
+
+### Excel Output Features
+
+- **Two worksheets per table**: Sample Count and P99 Latency
+- **Organized columns**: 3-hour data (B-I) and 7-day data (I onwards)
+- **Professional formatting**: Headers, styling, and auto-adjusted widths
+- **Comprehensive data**: All operations (GetItem, Query, Scan, etc.)
+
+For detailed information about the Excel processing, see [PYTHON_README.md](./PYTHON_README.md).
 
 ### Debug Mode
 
