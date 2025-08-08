@@ -1,18 +1,40 @@
-# DynamoDB Metrics Collection Tool updated 17-07-2025
+# DynamoDB Metrics Collection & Processing Tool
 
 > **💡 Simple Alternative**: If you prefer a simple script without any programming language runtime, check out the [Bash Script Version](./dynamo_metrics_collection.sh) or [macOS Script Version](./dynamo_metrics_collection_mac.sh) that only requires AWS CLI and standard Unix tools.
 
-A comprehensive tool for collecting DynamoDB metrics from CloudWatch. This repository provides both **Go** and **Bash** implementations.
+A comprehensive tool for collecting DynamoDB metrics from CloudWatch and processing them into Excel format. This repository provides **Go**, **Bash**, and **Python** implementations.
+
+## 🚀 Quick Start
+
+### 1. Collect Metrics
+```bash
+# Using Go version (recommended)
+./get_dynamodb_metrics -r us-east-1
+
+# Using Bash version
+./dynamo_metrics_collection.sh
+```
+
+### 2. Process to Excel
+```bash
+# Install Python dependencies
+pip install -r requirements.txt
+
+# Process collected logs to Excel
+python process_dynamodb_logs.py -t /path/to/logs -d /path/to/output -c customer_name -f csv
+```
 
 ## 📋 Quick Links
 
-- **🖥️ Go Version** (This README) - Cross-platform, compiled binary
+- **🖥️ Go Version** (This README) - Cross-platform, compiled binary for metrics collection
 - **🐚 [Bash Script](./dynamo_metrics_collection.sh)** - Linux/Unix systems, no compilation needed
 - **🍎 [macOS Script](./dynamo_metrics_collection_mac.sh)** - macOS optimized version
 - **📊 [Python Excel Processor](./process_dynamodb_logs.py)** - Process log files into Excel format
+- **📈 [Processing Flowchart](./PROCESSING_FLOWCHART.md)** - Visual guide to the processing logic
 
 ## Features
 
+### Metrics Collection (Go/Bash)
 - **Dual Collection Periods**: Collects metrics for both 3-hour (20-minute intervals) and 7-day (24-hour intervals) periods
 - **Multi-Region Support**: Process tables across multiple AWS regions
 - **Flexible Authentication**: Support for AWS profiles, default credentials, and EC2 instance profiles
@@ -20,6 +42,15 @@ A comprehensive tool for collecting DynamoDB metrics from CloudWatch. This repos
 - **Rate Limiting**: Built-in AWS API call tracking with configurable wait thresholds
 - **Log Consolidation**: Automatically consolidates raw metric files into organized summaries
 - **Detailed Logging**: Comprehensive logging with timestamps and log levels
+
+### Excel Processing (Python)
+- **Multi-Region Processing**: Creates separate Excel files for each region
+- **Dynamic Operation Detection**: Automatically discovers all DynamoDB operations
+- **Comprehensive Data Extraction**: Processes both CSV and JSON format log files
+- **Table Metadata Integration**: Extracts and includes table details from `table_detailed.log`
+- **Professional Excel Output**: Formatted worksheets with headers, styling, and auto-adjusted columns
+- **Missing Data Logging**: Detailed logging of APIs with no data for troubleshooting
+- **Flexible Output**: Customizable customer names and output directories
 
 ## Prerequisites
 
@@ -29,19 +60,45 @@ A comprehensive tool for collecting DynamoDB metrics from CloudWatch. This repos
 
 ## Installation
 
-1. Clone or download the source code
-2. Install dependencies:
-   ```bash
-   go mod tidy
-   ```
-3. Build the binary:
-   ```bash
-   go build -o get_dynamodb_metrics
-   ```
+### Option 1: Build from Source
+```bash
+# Clone the repository
+git clone <repository-url>
+cd dynamodbdetails-for-sizing-scylla
+
+# Install dependencies
+go mod tidy
+
+# Build the binary
+go build -o get_dynamodb_metrics
+```
+
+### Option 2: Use Makefile
+```bash
+# Build for current platform
+make build
+
+# Build for all platforms (Linux, macOS, Windows)
+make build-all
+
+# Install dependencies
+make deps
+```
+
+### Option 3: Docker
+```bash
+# Build Docker image
+docker build -t dynamodb-metrics .
+
+# Run with Docker Compose
+docker-compose run dynamodb-metrics --help
+```
 
 ## Usage
 
-### Basic Usage
+### Metrics Collection (Go Binary)
+
+#### Basic Usage
 
 ```bash
 # Process all tables in the default region
@@ -60,15 +117,17 @@ A comprehensive tool for collecting DynamoDB metrics from CloudWatch. This repos
 ./get_dynamodb_metrics -I
 ```
 
-### Command Line Options
+#### Command Line Arguments
 
-- `-t, --tables`: Comma-separated list of specific tables to process
-- `-p, --profile`: AWS profile to use for authentication
-- `-r, --regions`: Comma-separated list of regions to process
-- `-I, --instance-profile`: Use EC2 Instance Profile for authentication
-- `-w, --wait-threshold`: Number of AWS calls before waiting (default: 1000)
+| Flag | Long Flag | Description | Default |
+|------|-----------|-------------|---------|
+| `-t` | `--tables` | Comma-separated list of specific tables to process | All tables |
+| `-p` | `--profile` | AWS profile to use for authentication | Default profile |
+| `-r` | `--regions` | Comma-separated list of regions to process | Default region |
+| `-I` | `--instance-profile` | Use EC2 Instance Profile for authentication | false |
+| `-w` | `--wait-threshold` | Number of AWS calls before waiting | 1000 |
 
-### Examples
+#### Examples
 
 ```bash
 # Process only 'mytable' in current region
@@ -82,6 +141,78 @@ A comprehensive tool for collecting DynamoDB metrics from CloudWatch. This repos
 
 # Use instance profile with custom wait threshold
 ./get_dynamodb_metrics -I -w 500
+
+# Process all tables in multiple regions with specific profile
+./get_dynamodb_metrics -p staging -r us-east-1,us-west-2,eu-west-1
+```
+
+### Excel Processing (Python Script)
+
+#### Installation
+
+```bash
+# Install Python dependencies
+pip install -r requirements.txt
+
+# Or create virtual environment
+python3 -m venv venv
+source venv/bin/activate  # On Windows: venv\Scripts\activate
+pip install -r requirements.txt
+```
+
+#### Usage
+
+```bash
+# Basic usage
+python process_dynamodb_logs.py -t /path/to/logs -d /path/to/output -c customer_name -f csv
+
+# Example with specific parameters
+python process_dynamodb_logs.py \
+  -t /home/user/dynamo_metrics_logs_080525142223 \
+  -d /tmp/excel_output \
+  -c sas-2 \
+  -f csv
+
+# Process JSON format logs
+python process_dynamodb_logs.py \
+  -t /path/to/json/logs \
+  -d /tmp/excel_output \
+  -c my-customer \
+  -f json
+```
+
+#### Command Line Arguments
+
+| Flag | Long Flag | Description | Required |
+|------|-----------|-------------|----------|
+| `-t` | `--target` | Source directory containing DynamoDB log files | Yes |
+| `-d` | `--destination` | Destination directory for output Excel files | Yes |
+| `-c` | `--customer` | Customer name prefix for Excel files | Yes |
+| `-f` | `--format` | Data format ('json' or 'csv') | Yes |
+
+#### Examples
+
+```bash
+# Process CSV format logs
+python process_dynamodb_logs.py \
+  -t /home/user/dynamo_metrics_logs_080525142223 \
+  -d /tmp/excel_output \
+  -c sas-2 \
+  -f csv
+
+# Process JSON format logs
+python process_dynamodb_logs.py \
+  -t /path/to/json/logs \
+  -d /tmp/excel_output \
+  -c my-customer \
+  -f json
+
+# Process logs with different customer name
+python process_dynamodb_logs.py \
+  -t /path/to/logs \
+  -d /tmp/excel_output \
+  -c acme-corp \
+  -f csv
 ```
 
 ## Docker Support
@@ -110,6 +241,9 @@ AWS_PROFILE=production docker-compose run dynamodb-metrics -p production
 
 # Run with environment variables
 AWS_DEFAULT_REGION=us-east-1 docker-compose run dynamodb-metrics -r us-east-1
+
+# Run with specific tables and regions
+docker-compose run dynamodb-metrics -t table1,table2 -r us-east-1,us-west-2
 ```
 
 ### Interactive Container Shell for AWS Configuration
@@ -195,6 +329,8 @@ docker-compose run dynamodb-metrics
 
 ## Output Structure
 
+### Metrics Collection Output
+
 The tool creates a timestamped log directory with the following structure:
 
 ```
@@ -218,6 +354,16 @@ dynamo_metrics_logs_MMDDYYHHMMSS/
         ├── table_name_GetItem_p99_latency-3hr.log
         ├── table_name_GetItem_sample_count-7day.log
         └── table_name_GetItem_p99_latency-7day.log
+```
+
+### Excel Processing Output
+
+```
+output_directory/
+├── customer_region1_dynamodb_metrics_YYYYMMDD_HHMMSS.xlsx
+├── customer_region2_dynamodb_metrics_YYYYMMDD_HHMMSS.xlsx
+├── customer_region3_dynamodb_metrics_YYYYMMDD_HHMMSS.xlsx
+└── customer_YYYYMMDD_HHMMSS.log
 ```
 
 ## Metrics Collected
@@ -301,6 +447,62 @@ All logs are written to both console and log files for easy debugging and monito
 - Minimal memory footprint
 - Configurable wait thresholds for rate limiting
 
+## Excel Processing Details
+
+### Supported Data Formats
+
+The Python script supports two data formats:
+
+#### 1. CSV Format (Individual Log Files)
+```
+DATAPOINTS <value> <timestamp> <unit>
+Example: DATAPOINTS 2935.0 2025-08-05T15:29:00+00:00 Milliseconds
+```
+
+#### 2. JSON Format (CloudWatch API Response)
+```json
+{
+  "Datapoints": [
+    {
+      "Timestamp": "2025-08-05T15:29:00Z",
+      "SampleCount": 2935.0
+    }
+  ]
+}
+```
+
+#### 3. ASCII Table Format (table_detailed.log)
+```
+||  TableSizeBytes           |  1156168014599                        ||
+||  ItemCount                |  1670604447                           ||
+||  BillingMode              |  PAY_PER_REQUEST                      ||
+```
+
+### Excel Output Features
+
+Each Excel file contains:
+
+1. **Table Summary Worksheet**:
+   - Table metadata (size, items, billing mode, etc.)
+   - Max sample counts sorted by value
+   - Max P99 latencies sorted by value
+
+2. **Individual Table Worksheets** (one per DynamoDB table):
+   - Sample Count data for all operations (rows 3-9)
+   - P99 Latency data for all operations (rows 12-18)
+   - Max values section with highlighting
+   - Professional formatting and styling
+
+### Processing Logic
+
+The script follows this workflow:
+1. **Region Discovery**: Automatically finds all regions in the log directory
+2. **File Detection**: Locates individual log files in the correct directory structure
+3. **Data Parsing**: Extracts timestamps and values from log files
+4. **Metadata Extraction**: Parses table details from ASCII table format
+5. **Excel Generation**: Creates formatted Excel files with comprehensive data
+6. **Logging**: Records all processing steps and missing data for troubleshooting
+
 ## Differences from Bash Version
 
 ### Advantages of Go Version
@@ -342,28 +544,10 @@ All logs are written to both console and log files for easy debugging and monito
    - Check CloudWatch API quotas
    - Monitor AWS API call limits
 
-## 📊 Excel Processing
-
-After collecting metrics, you can process the log files into an Excel format using the Python script:
-
-### Processing Logs to Excel
-
-```bash
-# Install Python dependencies
-pip install -r requirements.txt
-
-# Process log files to Excel
-python process_dynamodb_logs.py <log_directory_path>
-```
-
-### Excel Output Features
-
-- **Two worksheets per table**: Sample Count and P99 Latency
-- **Organized columns**: 3-hour data (B-I) and 7-day data (I onwards)
-- **Professional formatting**: Headers, styling, and auto-adjusted widths
-- **Comprehensive data**: All operations (GetItem, Query, Scan, etc.)
-
-For detailed information about the Excel processing, see [PYTHON_README.md](./PYTHON_README.md).
+5. **Excel Processing Errors**
+   - Verify log directory structure matches expected format
+   - Check file permissions for input/output directories
+   - Ensure Python dependencies are installed: `pip install -r requirements.txt`
 
 ### Debug Mode
 
