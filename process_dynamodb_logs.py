@@ -139,6 +139,35 @@ from openpyxl.styles import Font, Alignment, PatternFill
 from openpyxl.utils.dataframe import dataframe_to_rows
 
 
+def parse_metric_timestamp(timestamp_str):
+    """
+    Parse a CloudWatch metric timestamp from CSV log output.
+
+    Supports ISO 8601 timestamps with arbitrary timezone offsets (e.g. +05:30),
+    UTC Z suffix, and legacy fixed-format strings used by older collectors.
+    """
+    if not timestamp_str:
+        return None
+
+    try:
+        return datetime.fromisoformat(timestamp_str.replace('Z', '+00:00'))
+    except ValueError:
+        pass
+
+    for fmt in (
+        '%Y-%m-%dT%H:%M:%S+00:00',
+        '%Y-%m-%dT%H:%M:%SZ',
+        '%Y-%m-%d %H:%M:%S',
+        '%Y-%m-%d %H:%M',
+    ):
+        try:
+            return datetime.strptime(timestamp_str, fmt)
+        except ValueError:
+            continue
+
+    return None
+
+
 def detect_file_format(file_path):
     """
     Detect if a file contains JSON or CSV format data.
@@ -285,47 +314,18 @@ def parse_csv_log_file(file_path):
                     # Sample count format: DATAPOINTS<tab>value<tab>timestamp<tab>unit
                     try:
                         value = float(parts[1])
-                        timestamp_str = parts[2]
-                        
-                        # Parse timestamp
-                        timestamp_formats = [
-                            '%Y-%m-%dT%H:%M:%S+00:00',  # ISO format with timezone
-                            '%Y-%m-%dT%H:%M:%SZ',       # ISO format
-                            '%Y-%m-%d %H:%M:%S',        # Standard format
-                            '%Y-%m-%d %H:%M',           # Short format
-                        ]
-                        
-                        for fmt in timestamp_formats:
-                            try:
-                                timestamp = datetime.strptime(timestamp_str, fmt)
-                                timestamps_values.append((timestamp, value))
-                                break
-                            except ValueError:
-                                continue
+                        timestamp = parse_metric_timestamp(parts[2])
+                        if timestamp is not None:
+                            timestamps_values.append((timestamp, value))
                     except (ValueError, TypeError, IndexError):
                         pass
                 
                 elif is_p99_latency and len(parts) >= 2:
                     # P99 latency format: DATAPOINTS<tab>timestamp<tab>unit
                     # Value will be on next line with EXTENDEDSTATISTICS
-                    timestamp_str = parts[1]
-                    
-                    # Parse timestamp
-                    timestamp = None
-                    timestamp_formats = [
-                        '%Y-%m-%dT%H:%M:%S+00:00',  # ISO format with timezone
-                        '%Y-%m-%dT%H:%M:%SZ',       # ISO format
-                        '%Y-%m-%d %H:%M:%S',        # Standard format
-                        '%Y-%m-%d %H:%M',           # Short format
-                    ]
-                    
-                    for fmt in timestamp_formats:
-                        try:
-                            timestamp = datetime.strptime(timestamp_str, fmt)
-                            current_timestamp = timestamp
-                            break
-                        except ValueError:
-                            continue
+                    timestamp = parse_metric_timestamp(parts[1])
+                    if timestamp is not None:
+                        current_timestamp = timestamp
                 
             # Look for EXTENDEDSTATISTICS value (for p99_latency files)
             elif line.startswith('EXTENDEDSTATISTICS') and current_timestamp is not None:

@@ -3,15 +3,19 @@ import argparse
 import os
 import json
 import re
+from datetime import datetime
 from pathlib import Path
-from typing import Dict, List
+from typing import Dict, List, Tuple
 from collections import defaultdict
 
 from dash import Dash, dcc, html, dash_table
 import plotly.graph_objs as go
 
 # ----------------- Globals -----------------
-DDB_OPERATIONS = {"Query", "BatchWriteItem", "DeleteItem", "GetItem", "PutItem", "Scan"}
+DDB_OPERATIONS = {
+    "Query", "BatchWriteItem", "DeleteItem", "GetItem",
+    "PutItem", "Scan", "UpdateItem",
+}
 REGIONS = set()
 TABLES = set()
 SAMPLES = []
@@ -21,10 +25,218 @@ def __print_tuple_keyed_dict(d):
     printable = {str(k): v for k, v in d.items()}
     print(json.dumps(printable, indent=2))
 
-def parse_table_metadata(log_file_path: str):
-    if not os.path.exists(log_file_path):
-        return
 
+def parse_metric_timestamp(timestamp_str: str):
+    """Parse CloudWatch CSV timestamps, including offsets like +05:30."""
+    if not timestamp_str:
+        return None
+    try:
+        return datetime.fromisoformat(timestamp_str.replace("Z", "+00:00"))
+    except ValueError:
+        pass
+    for fmt in (
+        "%Y-%m-%dT%H:%M:%S+00:00",
+        "%Y-%m-%dT%H:%M:%SZ",
+        "%Y-%m-%d %H:%M:%S",
+        "%Y-%m-%d %H:%M",
+    ):
+        try:
+            return datetime.strptime(timestamp_str, fmt)
+        except ValueError:
+            continue
+    return None
+
+
+def detect_file_format(file_path: str) -> str:
+    """Return 'json', 'csv', or 'unknown' for a metric log file."""
+    try:
+        with open(file_path, "r", encoding="utf-8") as f:
+            content = f.read().strip()
+        if not content:
+            return "unknown"
+        try:
+            data = json.loads(content)
+            if isinstance(data, dict) and "Datapoints" in data:
+                return "json"
+        except (json.JSONDecodeError, ValueError):
+            pass
+        if "DATAPOINTS" in content or "EXTENDEDSTATISTICS" in content:
+            return "csv"
+        # CloudWatch header with no datapoints (no traffic in window)
+        if content.startswith("SuccessfulRequestLatency"):
+            return "csv"
+    except OSError as e:
+        print(f"Error detecting format for {file_path}: {e}")
+    return "unknown"
+
+
+def parse_csv_log_file(file_path: str) -> List[Tuple[datetime, float]]:
+    """Parse tab-delimited CloudWatch CSV metric output."""
+    timestamps_values: List[Tuple[datetime, float]] = []
+    try:
+        with open(file_path, "r", encoding="utf-8") as f:
+            lines = f.read().strip().split("\n")
+    except OSError as e:
+        print(f"Error reading CSV file {file_path}: {e}")
+        return timestamps_values
+
+    is_sample_count = "sample_count" in file_path or "SampleCount" in file_path
+    is_p99_latency = "p99_latency" in file_path or "P99" in file_path
+    current_timestamp = None
+
+    for line in lines:
+        line = line.strip()
+        if not line:
+            continue
+
+        if line.startswith("DATAPOINTS"):
+            parts = line.split("\t")
+            if len(parts) < 2:
+                parts = line.split()
+
+            if is_sample_count and len(parts) >= 3:
+                try:
+                    value = float(parts[1])
+                    timestamp = parse_metric_timestamp(parts[2])
+                    if timestamp is not None:
+                        timestamps_values.append((timestamp, value))
+                except (ValueError, TypeError, IndexError):
+                    pass
+            elif is_p99_latency and len(parts) >= 2:
+                timestamp = parse_metric_timestamp(parts[1])
+                if timestamp is not None:
+                    current_timestamp = timestamp
+
+        elif line.startswith("EXTENDEDSTATISTICS") and current_timestamp is not None:
+            parts = line.split("\t")
+            if len(parts) < 2:
+                parts = line.split()
+            if len(parts) >= 2:
+                try:
+                    value = float(parts[1])
+                    timestamps_values.append((current_timestamp, value))
+                    current_timestamp = None
+                except (ValueError, TypeError):
+                    pass
+
+    return timestamps_values
+
+
+def load_metric_datapoints(file_path: str, metric: str) -> List[Tuple[str, float]]:
+    """
+    Load (timestamp, value) pairs from a JSON or CSV metric log file.
+    metric: 'Count' for sample_count, 'P99' for p99_latency.
+    """
+    file_format = detect_file_format(file_path)
+    datapoints: List[Tuple[str, float]] = []
+
+    if file_format == "json":
+        try:
+            with open(file_path, "r", encoding="utf-8") as f:
+                data = json.load(f)
+            for dp in data.get("Datapoints", []):
+                ts = dp.get("Timestamp")
+                if metric == "Count":
+                    val = dp.get("SampleCount")
+                else:
+                    val = (dp.get("ExtendedStatistics") or {}).get("p99")
+                if ts is not None and val is not None:
+                    datapoints.append((ts, float(val)))
+        except Exception as e:
+            print(f"Error reading JSON file {file_path}: {e}")
+    elif file_format == "csv":
+        for ts, val in parse_csv_log_file(file_path):
+            datapoints.append((ts.isoformat(), val))
+    else:
+        print(f"Warning: Unknown format for {file_path}")
+
+    return datapoints
+
+
+def _ascii_field_value(line: str, field: str):
+    match = re.search(rf"{re.escape(field)}\s*\|\s*([^|]+?)\s*\|", line)
+    return match.group(1).strip() if match else None
+
+
+def parse_ascii_table_metadata(content: str):
+    """Parse ASCII table_detailed.log output from Bash/Go collectors."""
+    current_region = None
+    current_table = None
+    in_key_schema = False
+    key_schema: List[dict] = []
+    table_data: dict = {}
+
+    def flush_table():
+        nonlocal table_data, key_schema
+        if current_region and current_table and table_data:
+            table_data["KeySchema"] = key_schema
+            update_sample_metadata(current_region, current_table, table_data)
+        table_data = {}
+        key_schema = []
+
+    for raw in content.split("\n"):
+        line = raw.strip()
+        if not line:
+            continue
+
+        if line.startswith("=== Table:"):
+            flush_table()
+            in_key_schema = False
+            match = re.match(r"=== Table: (.*?) \(Region: (.*?)\) ===", line)
+            if match:
+                current_table = match.group(1)
+                current_region = match.group(2)
+            continue
+
+        if current_table is None:
+            continue
+
+        if "KeySchema" in line and "AttributeName" not in line:
+            in_key_schema = True
+            continue
+        if in_key_schema:
+            key_match = re.search(r"\|\|\s+(\S+)\s+\|\s+(HASH|RANGE)", line)
+            if key_match:
+                key_schema.append({
+                    "AttributeName": key_match.group(1),
+                    "KeyType": key_match.group(2),
+                })
+                continue
+            if line.startswith("Region:") and "ProvisionedThroughput" in line:
+                in_key_schema = False
+
+        if re.search(r"\bItemCount\b", line):
+            val = _ascii_field_value(line, "ItemCount")
+            if val and val.isdigit():
+                table_data["ItemCount"] = int(val)
+        elif "ReadCapacityUnits" in line:
+            val = _ascii_field_value(line, "ReadCapacityUnits")
+            if val and val.isdigit():
+                table_data.setdefault("ProvisionedThroughput", {})["ReadCapacityUnits"] = int(val)
+        elif "WriteCapacityUnits" in line:
+            val = _ascii_field_value(line, "WriteCapacityUnits")
+            if val and val.isdigit():
+                table_data.setdefault("ProvisionedThroughput", {})["WriteCapacityUnits"] = int(val)
+        elif "NumberOfDecreasesToday" in line:
+            val = _ascii_field_value(line, "NumberOfDecreasesToday")
+            if val and val.isdigit():
+                table_data.setdefault("ProvisionedThroughput", {})["NumberOfDecreasesToday"] = int(val)
+        elif "StreamEnabled" in line:
+            val = _ascii_field_value(line, "StreamEnabled")
+            if val is not None:
+                table_data["StreamSpecification"] = {"StreamEnabled": val.lower() == "true"}
+        elif "BillingMode" in line and "Summary" not in line:
+            val = _ascii_field_value(line, "BillingMode")
+            if val:
+                table_data["BillingModeSummary"] = {"BillingMode": val}
+        elif "LocalSecondaryIndexes" in line and "None" not in line:
+            table_data["LocalSecondaryIndexes"] = [{"IndexName": "LSI"}]
+
+    flush_table()
+
+
+def parse_json_table_metadata(log_file_path: str):
+    """Parse JSON-embedded table_detailed.log output."""
     current_region = None
     current_table = None
     json_buffer: List[str] = []
@@ -36,7 +248,7 @@ def parse_table_metadata(log_file_path: str):
             process_json_block(current_region, current_table, json_buffer)
         json_buffer = []
 
-    with open(log_file_path, "r") as f:
+    with open(log_file_path, "r", encoding="utf-8") as f:
         for raw in f:
             line = raw.strip()
 
@@ -50,11 +262,23 @@ def parse_table_metadata(log_file_path: str):
                 continue
 
             if inside_table and "|" in line:
-                # Strip "Region: xyz | " prefix
                 _, json_part = line.split("|", 1)
                 json_buffer.append(json_part.strip())
 
-    flush()  # final
+    flush()
+
+
+def parse_table_metadata(log_file_path: str):
+    if not os.path.exists(log_file_path):
+        return
+
+    with open(log_file_path, "r", encoding="utf-8") as f:
+        content = f.read()
+
+    if "=== Table:" in content and "||" in content:
+        parse_ascii_table_metadata(content)
+    else:
+        parse_json_table_metadata(log_file_path)
 
 def process_json_block(region, table_name, lines):
     try:
@@ -132,13 +356,21 @@ def _update_peak_in_global(peaks, region, table, op, metric, timestamp, value):
         t[op] = {"timestamp": timestamp, "value": value}
 
 def traverse(request_table=None):
-    global SAMPLES, REGIONS, TABLES
+    global SAMPLES, REGIONS, TABLES, BASE_DIR
     REGIONS = set()
     TABLES = set()
-    SAMPLES = [
-        name for name in os.listdir(BASE_DIR)
-        if name.startswith("dynamo_metrics_logs_") and os.path.isdir(os.path.join(BASE_DIR, name))
-    ]
+
+    base = os.path.abspath(BASE_DIR)
+    if os.path.basename(base).startswith("dynamo_metrics_logs_"):
+        SAMPLES = [os.path.basename(base)]
+        BASE_DIR = os.path.dirname(base) or "."
+    else:
+        BASE_DIR = base
+        SAMPLES = [
+            name for name in os.listdir(BASE_DIR)
+            if name.startswith("dynamo_metrics_logs_")
+            and os.path.isdir(os.path.join(BASE_DIR, name))
+        ]
 
     for sample in SAMPLES:
         sample_path = os.path.join(BASE_DIR, sample)
@@ -180,22 +412,19 @@ def process_data():
                         continue
                     for record in os.listdir(sample_count_path):
                         sample_record = os.path.join(sample_count_path, record)
+                        if not os.path.isfile(sample_record):
+                            continue
                         try:
-                            with open(sample_record, "r") as f:
-                                data = json.load(f)
-                                for dp in data.get("Datapoints", []):
-                                    ts = dp.get("Timestamp")
-                                    val = dp.get("SampleCount")
-                                    SampleCountData[operation].append({
-                                        "timestamp": ts,
-                                        "value": val,
-                                        "table": table,
-                                        "region": region,
-                                        "sample": sample,
-                                    })
-                                    # Update peaks
-                                    _update_peak_in_tables(SampleMetaData, table, region, operation, "Count", ts, val)
-                                    _update_peak_in_global(Peaks, region, table, operation, "Count", ts, val)
+                            for ts, val in load_metric_datapoints(sample_record, "Count"):
+                                SampleCountData[operation].append({
+                                    "timestamp": ts,
+                                    "value": val,
+                                    "table": table,
+                                    "region": region,
+                                    "sample": sample,
+                                })
+                                _update_peak_in_tables(SampleMetaData, table, region, operation, "Count", ts, val)
+                                _update_peak_in_global(Peaks, region, table, operation, "Count", ts, val)
                         except Exception as e:
                             print(f"Error reading {sample_record}: {e}")
 
@@ -209,22 +438,19 @@ def process_data():
                         continue
                     for record in os.listdir(p99_path):
                         sample_record = os.path.join(p99_path, record)
+                        if not os.path.isfile(sample_record):
+                            continue
                         try:
-                            with open(sample_record, "r") as f:
-                                data = json.load(f)
-                                for dp in data.get("Datapoints", []):
-                                    ts = dp.get("Timestamp")
-                                    val = (dp.get("ExtendedStatistics") or {}).get("p99")
-                                    SampleP99Data[operation].append({
-                                        "timestamp": ts,
-                                        "value": val,
-                                        "table": table,
-                                        "region": region,
-                                        "sample": sample,
-                                    })
-                                    # Update peaks
-                                    _update_peak_in_tables(SampleMetaData, table, region, operation, "P99", ts, val)
-                                    _update_peak_in_global(Peaks, region, table, operation, "P99", ts, val)
+                            for ts, val in load_metric_datapoints(sample_record, "P99"):
+                                SampleP99Data[operation].append({
+                                    "timestamp": ts,
+                                    "value": val,
+                                    "table": table,
+                                    "region": region,
+                                    "sample": sample,
+                                })
+                                _update_peak_in_tables(SampleMetaData, table, region, operation, "P99", ts, val)
+                                _update_peak_in_global(Peaks, region, table, operation, "P99", ts, val)
                         except Exception as e:
                             print(f"Error reading {sample_record}: {e}")
 
@@ -382,9 +608,9 @@ def main(operation, folder=None, table=None):
         run_dash_ui()
 
 def parse_args():
-    parser = argparse.ArgumentParser(description="CSV Folder Processor and Dash Visualizer (no pandas)")
+    parser = argparse.ArgumentParser(description="DynamoDB metrics loader and Dash visualizer (JSON or CSV)")
     parser.add_argument("operation", type=str, choices=["load", "UI"], help="Process data or launch UI")
-    parser.add_argument("--folder", type=str, help="Root folder with CSV files", default=None)
+    parser.add_argument("--folder", type=str, help="Parent folder containing dynamo_metrics_logs_* directories", default=None)
     parser.add_argument("--table", type=str, help="Optional: limit to a single table")
     return parser.parse_args()
 
